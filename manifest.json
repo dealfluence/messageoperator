@@ -1,0 +1,62 @@
+{
+  "manifest_version": "0.2",
+  "name": "mailroom",
+  "display_name": "Message Operator",
+  "version": "0.6.0",
+  "description": "Email as a small computer: four VM tools over your real mailboxes, with a credential-holding broker at the tool-call edges.",
+  "long_description": "A local MCP server that presents email as an environment instead of an API: one RFC 2822 .eml file per message in a Maildir tree, a `mail` CLI for reading, searching, drafting, and queueing sends, and a broker that holds all credentials, enforces send policy (allowlist, rate limit, dry-run), and audits every change. The whole mailbox (100k+ messages) is indexed as metadata in a local SQLite store with full-text search; message bodies download on demand and older ones are evicted under a size quota. Sends never happen directly — the agent queues an intent, the broker validates and delivers when the tool call ends. Mailboxes are connected in-chat with `mail login <address>`: sign-ins happen in your own browser (Microsoft OAuth, or a guided Gmail app-password page); credentials never pass through the chat.",
+  "author": {
+    "name": "Team Adeu",
+    "email": "mikko@adeu.ai"
+  },
+  "license": "BUSL-1.1",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/cli.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/cli.js", "serve"],
+      "env": {
+        "MAILROOM_HOME": "${user_config.mailroom_home}",
+        "MAILROOM_DRY_RUN": "${user_config.dry_run}",
+        "MAILROOM_MS_CLIENT_ID": "${user_config.microsoft_client_id}",
+        "MAILROOM_ALLOWED_RECIPIENT_DOMAINS": "${user_config.allowed_recipient_domains}"
+      }
+    }
+  },
+  "user_config": {
+    "microsoft_client_id": {
+      "type": "string",
+      "title": "Microsoft app (client) ID",
+      "description": "Azure app registration ID (public client with an http://localhost redirect URI; Graph delegated permissions Mail.ReadWrite + Mail.Send). Only needed for Outlook/Microsoft 365 mailboxes; shared by every Microsoft account. Mailboxes themselves are connected in-chat via `mail login`.",
+      "required": false
+    },
+    "dry_run": {
+      "type": "boolean",
+      "title": "Dry run (simulate sends)",
+      "description": "When on, everything works except the actual network send — outgoing mail is simulated and ledgered. Turn off only after a test run looks right.",
+      "default": true,
+      "required": false
+    },
+    "allowed_recipient_domains": {
+      "type": "string",
+      "title": "Allowed recipient domains",
+      "description": "Comma-separated domains mail may be sent to (e.g. example.com, partner.org). Empty = only your own account addresses.",
+      "required": false
+    },
+    "mailroom_home": {
+      "type": "directory",
+      "title": "State directory",
+      "description": "Where the mail room and broker state live.",
+      "default": "${HOME}/mailroom",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=22.13"
+    }
+  },
+  "keywords": ["email", "gmail", "outlook", "maildir", "agent"]
+}

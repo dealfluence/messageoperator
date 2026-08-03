@@ -1,0 +1,40 @@
+node_modules/
+dist/
+bundle/
+*.mcpb
+.ralph.json
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# throwaway rooms built by test/test_mail_py.py
+test/.scratch/
+# AI session working-memory artifacts (never part of the product)
+AI_SESSION.md
+/task_plan.md
+/progress.md
+/findings.md
+
+# ingest data & secrets must never enter git (data lives under ~/mailroom-ingest)
+mailroom-ingest/
+*.db
+*.db-wal
+*.db-shm
+blobs/
+credentials/
+gmail_app_pw*
+*.intent.json
+*.eml
+*.token
+*.pw
+
+# Local AI/agent tooling — machine-specific, never part of the product.
+# .kilo/kilo.json pins an absolute plugin path; graphify-out/ is a ~4MB
+# generated knowledge graph that embeds this machine's filesystem layout.
+.kilo/
+.claude/
+graphify-out/
+# graphify's own git hooks pin an absolute interpreter path
+# (C:\Users\<name>\...\python.exe); keep them locally, never publish them.
+/.husky/post-commit
+/.husky/post-checkout

@@ -1,0 +1,2 @@
+# git hooks run under sh; CRLF checkouts break them
+.husky/* text eol=lf

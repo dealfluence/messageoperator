@@ -1,0 +1,10 @@
+package-lock.json
+*.mcpb
+dist/
+bundle/
+node_modules/
+.venv/
+.pytest_cache/
+graphify-out/
+.kilo/
+.claude/

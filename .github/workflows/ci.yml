@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  verify:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "npm"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (Strict)
+        # npm ci fails if package-lock.json is out of sync with package.json
+        run: npm ci
+
+      - name: Check Formatting
+        # We use --check instead of the format script's --write so CI fails if a dev forgot to format
+        run: npx prettier --check .
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        # Runs both vitest and the experimental sqlite ingest tests
+        run: npm test
+
+      - name: Verify Build
+        # Ensures esbuild, asset copying, and manifest generation works
+        run: npm run build
