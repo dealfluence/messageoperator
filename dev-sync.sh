@@ -20,29 +20,12 @@ export PATH="/opt/homebrew/bin:$PATH"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT_ROOT="$HOME/Library/Application Support/Claude/Claude Extensions"
 EXT="$EXT_ROOT/local.mcpb.team-adeu.messageoperator"
-# pre-rename (≤0.6.0 "mailroom") extension id — detect so a stale install
-# does not silently keep running old code next to the renamed one
-OLD_EXT="$EXT_ROOT/local.mcpb.team-adeu.mailroom"
 
 if [[ ! -d "$EXT" ]]; then
   echo "✗ installed extension not found at:" >&2
   echo "    $EXT" >&2
-  if [[ -d "$OLD_EXT" ]]; then
-    echo "  A pre-rename 'mailroom' extension is still installed at:" >&2
-    echo "    $OLD_EXT" >&2
-    echo "  Install messageoperator.mcpb in Claude Desktop, remove the old" >&2
-    echo "  'Mailroom' extension there, then re-run." >&2
-  else
-    echo "  Install messageoperator.mcpb in Claude Desktop once, then re-run." >&2
-  fi
+  echo "  Install messageoperator.mcpb in Claude Desktop once, then re-run." >&2
   exit 1
-fi
-
-if [[ -d "$OLD_EXT" ]]; then
-  echo "⚠ pre-rename 'mailroom' extension is ALSO still installed:" >&2
-  echo "    $OLD_EXT" >&2
-  echo "  Remove it in Claude Desktop's extension settings — two installed" >&2
-  echo "  servers would race over the same state directory." >&2
 fi
 
 cd "$REPO"
@@ -72,16 +55,8 @@ fi
 # full Desktop restart the running broker keeps the old room copy. So push the
 # fresh mail.py straight into the live room too — the broker overwrites it with
 # an identical file on next boot, so this is always safe.
-# State home: canonical env, then legacy env, then the same directory probe
-# layout.ts stateHome() uses.
-MO_HOME="${MESSAGEOPERATOR_HOME:-${MAILROOM_HOME:-}}"
-if [[ -z "$MO_HOME" ]]; then
-  if [[ ! -d "$HOME/messageoperator" && -d "$HOME/mailroom" ]]; then
-    MO_HOME="$HOME/mailroom"
-  else
-    MO_HOME="$HOME/messageoperator"
-  fi
-fi
+# State home: the canonical env var, else the default layout.ts stateHome() uses.
+MO_HOME="${MESSAGEOPERATOR_HOME:-$HOME/messageoperator}"
 ROOM_MAIL="$MO_HOME/room/bin/mail.py"
 if [[ -f "$ROOM_MAIL" ]]; then
   cp -f "$REPO/bundle/dist/room_assets/mail.py" "$ROOM_MAIL"

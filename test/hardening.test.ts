@@ -1,10 +1,8 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { cleanEnvValue, loadConfig } from "../src/config.js";
-import { adoptLegacyEnv } from "../src/env.js";
 import { defaultStateHome, stateHome } from "../src/layout.js";
 import { tmpHome } from "./helpers.js";
 
@@ -44,42 +42,6 @@ describe("stateHome hardening (Claude Desktop env templates)", () => {
     const abs = tmpHome();
     process.env.MESSAGEOPERATOR_HOME = abs;
     expect(stateHome()).toBe(abs);
-  });
-});
-
-describe("defaultStateHome legacy probe (v0.6 rename)", () => {
-  it("prefers ~/messageoperator, keeps an existing ~/mailroom, modern wins", () => {
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "mo-home-"));
-    const spy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-    try {
-      // neither exists: fresh installs get the new name
-      expect(defaultStateHome()).toBe(path.join(fakeHome, "messageoperator"));
-      // only the pre-rename dir exists: existing data keeps being used
-      fs.mkdirSync(path.join(fakeHome, "mailroom"));
-      expect(defaultStateHome()).toBe(path.join(fakeHome, "mailroom"));
-      // both exist: the canonical dir wins
-      fs.mkdirSync(path.join(fakeHome, "messageoperator"));
-      expect(defaultStateHome()).toBe(path.join(fakeHome, "messageoperator"));
-    } finally {
-      spy.mockRestore();
-      fs.rmSync(fakeHome, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("adoptLegacyEnv (v0.6 rename)", () => {
-  it("adopts MAILROOM_* values without clobbering canonical names", () => {
-    const env: NodeJS.ProcessEnv = {
-      MAILROOM_HOME: "/legacy",
-      MAILROOM_DRY_RUN: "false",
-      MESSAGEOPERATOR_DRY_RUN: "true",
-      UNRELATED: "x",
-    };
-    adoptLegacyEnv(env);
-    expect(env.MESSAGEOPERATOR_HOME).toBe("/legacy");
-    expect(env.MESSAGEOPERATOR_DRY_RUN).toBe("true"); // canonical wins
-    expect(env.MAILROOM_HOME).toBe("/legacy"); // originals stay for stripping
-    expect(env.UNRELATED).toBe("x");
   });
 });
 

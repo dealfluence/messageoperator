@@ -621,11 +621,11 @@ def print_message_file(p, part=1):
             views = set()
             tables = set()
             for i, line in enumerate(lines):
-                if line.startswith("X-Messageoperator-Attachments:") or line.startswith("X-Mailroom-Attachments:"):
+                if line.startswith("X-Messageoperator-Attachments:"):
                     attachments.append(line.split(":", 1)[1].strip())
-                elif line.startswith("X-Messageoperator-Attachment-Views:") or line.startswith("X-Mailroom-Attachment-Views:"):
+                elif line.startswith("X-Messageoperator-Attachment-Views:"):
                     views.add(line.split(":", 1)[1].strip())
-                elif line.startswith("X-Messageoperator-Attachment-Tables:") or line.startswith("X-Mailroom-Attachment-Tables:"):
+                elif line.startswith("X-Messageoperator-Attachment-Tables:"):
                     tables.add(line.split(":", 1)[1].strip())
                 elif not line.strip():
                     body_start = i + 1
@@ -2145,7 +2145,7 @@ def cmd_export(args):
                 for line in meta.read_text(
                     encoding="utf-8", errors="replace"
                 ).splitlines():
-                    if line.startswith("X-Messageoperator-Attachments:") or line.startswith("X-Mailroom-Attachments:"):
+                    if line.startswith("X-Messageoperator-Attachments:"):
                         rp = line.split(":", 1)[1].strip()
                         fp = ROOM / PurePosixPath(rp)
                         if fp.is_file():
@@ -2243,7 +2243,7 @@ def _tabular_dbs_from_meta(meta_path):
     if meta_path.is_file():
         try:
             for line in meta_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("X-Messageoperator-Attachment-Tables:") or line.startswith("X-Mailroom-Attachment-Tables:"):
+                if line.startswith("X-Messageoperator-Attachment-Tables:"):
                     rel = line.split(":", 1)[1].strip()
                     # the attachment is the db path minus the .tabular.db suffix
                     name = (
@@ -2260,7 +2260,7 @@ def _tabular_dbs_from_meta(meta_path):
 def _tabular_dbs_for_message(sha):
     """Resolve a message id to its .tabular.db sidecar paths (room-relative).
 
-    Reads the message's .meta sidecar for X-Mailroom-Attachment-Tables lines.
+    Reads the .meta sidecar for X-Messageoperator-Attachment-Tables lines.
     Returns a list of (attachment_name, room_relative_db_path). Empty when the
     message has no tabular attachments or its body is not on disk yet."""
     conn = open_store()

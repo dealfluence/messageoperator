@@ -6,16 +6,13 @@
  * requirements.
  */
 
-// Only Node built-ins (plus the import-free env shim) at module scope: the
-// serve path must reach the MCP handshake without waiting on (or being killed
-// by) the provider dependency graph — every project module is imported
-// dynamically per command.
+// Only Node built-ins at module scope: the serve path must reach the MCP
+// handshake without waiting on (or being killed by) the provider dependency
+// graph — every project module is imported dynamically per command.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-
-import { adoptLegacyEnv } from "./env.js";
 
 function usage(): never {
   // writeSync: an async stderr write would be dropped by the exit below
@@ -191,8 +188,6 @@ function promptHidden(prompt: string): Promise<string> {
 }
 
 async function main(): Promise<number> {
-  // Adopt pre-rename MAILROOM_* env values before anything reads env.
-  adoptLegacyEnv();
   const [command, ...rest] = process.argv.slice(2);
   if (!command) usage();
 
@@ -211,14 +206,10 @@ async function main(): Promise<number> {
       /* stderr gone */
     }
     try {
-      // same default + legacy-dir probe as layout.ts stateHome(), inlined to
-      // keep the crash path free of project imports
+      // same default as layout.ts stateHome(), inlined to keep the crash path
+      // free of project imports
       const home =
         (process.env.MESSAGEOPERATOR_HOME || "").trim() ||
-        [
-          path.join(os.homedir(), "messageoperator"),
-          path.join(os.homedir(), "mailroom"),
-        ].find((p) => fs.existsSync(p)) ||
         path.join(os.homedir(), "messageoperator");
       fs.appendFileSync(path.join(home, "broker", "serve-crash.log"), line);
     } catch {

@@ -41,15 +41,9 @@ export function stateHome(): string {
   return expanded;
 }
 
-/**
- * ~/messageoperator, unless only a legacy ~/mailroom (state written by a
- * pre-rename install) exists — that data keeps being used untouched.
- */
+/** `~/messageoperator`: the state tree the broker and the room share. */
 export function defaultStateHome(): string {
-  const modern = path.join(os.homedir(), "messageoperator");
-  const legacy = path.join(os.homedir(), "mailroom");
-  if (!fs.existsSync(modern) && fs.existsSync(legacy)) return legacy;
-  return modern;
+  return path.join(os.homedir(), "messageoperator");
 }
 
 export function sha12(data: Buffer | string): string {

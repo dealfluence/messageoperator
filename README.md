@@ -1,6 +1,6 @@
 # Message Operator : email as a small computer
 
-The TypeScript Message Operator server (formerly "Mailroom"), targeting
+The TypeScript Message Operator server, targeting
 **macOS + Claude Desktop** and packaged
 as an **MCPB bundle** (`.mcpb`, one-click install). The architecture is a
 filesystem contract, not a language artifact: the room/broker split, path
@@ -39,8 +39,7 @@ npx mcpb pack bundle messageoperator.mcpb     # or: npm run pack:mcpb
 
 Open the `.mcpb` with Claude Desktop on macOS to install. The extension
 settings hold only policy and the Azure client ID; mailboxes are connected
-in-chat with `mail login <address>`. State lives under `~/messageoperator/`
-(an existing `~/mailroom/` from a pre-rename install keeps being used).
+in-chat with `mail login <address>`. State lives under `~/messageoperator/`.
 
 ## Azure app registration (Microsoft accounts)
 

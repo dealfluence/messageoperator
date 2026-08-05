@@ -1223,29 +1223,6 @@ class TableVerbTests(MailCliTestBase):
         self.assertIn("Orders", out)
         self.assertIn("2 rows × 3 cols", out)
 
-    def test_read_and_export_legacy_mailroom_meta_headers(self):
-        """Rooms that predate the Mailroom -> Message Operator rename still have
-        X-Mailroom-* .meta sidecars sitting on disk, and mail.py must keep
-        reading them. The header names below are deliberate back-compat, NOT
-        rename leftovers: do not translate them to X-Messageoperator-*."""
-        sha = "deadbeef1234"
-        att_dir = self.attachments / sha
-        att_dir.mkdir(parents=True, exist_ok=True)
-        (att_dir / "Legacy.pdf").write_bytes(b"%PDF-1.4 legacy")
-        raw = (
-            "From: v@x.com\r\nTo: me@adeu.ai\r\nSubject: legacy\r\n"
-            "Message-ID: <leg@x.com>\r\n\r\nbody\r\n"
-        )
-        meta = (
-            f"X-Mailroom-Sha: {sha}\n"
-            "X-Mailroom-Account: me@adeu.ai\n"
-            f"X-Mailroom-Attachments: attachments/{sha}/Legacy.pdf\n"
-            "\nbody\n"
-        )
-        p = self.write_inbound("me@adeu.ai", "201.cccc.eml", raw, meta=meta)
-        proc = self.run_mail("read", self.rel(p), expect_code=0)
-        self.assertIn("Legacy.pdf", proc.stdout)
-
 
 class ReadPaginationTests(MailCliTestBase):
     """`mail read --part N` splits a long body into READ_PART_BYTES chunks with
