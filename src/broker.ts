@@ -1399,11 +1399,18 @@ export class Broker {
           await this.publishStatus();
         },
         onRemoveAccount: async (address, deleteLocal) => {
+          // read before removeAccountFromFile deletes the entry: forgetting
+          // the MSAL cache needs the account's client_id
+          const acct = findAccount(loadConfig(this.layout.configPath), address);
           const removed = removeAccountFromFile(
             this.layout.configPath,
             address,
           );
           await deleteGmailAppPassword(this.layout, address);
+          const msalForgotten =
+            acct?.provider === "microsoft"
+              ? await msgraph.forgetAccount(this.layout, acct)
+              : undefined;
           // Sync bookkeeping is dead either way — the account no longer syncs.
           // Messages are NOT touched here: "keep the local copy" means the user
           // can still read that mail, so those rows only go with the files (see
@@ -1412,6 +1419,9 @@ export class Broker {
           this.ledger.append("account_removed", {
             address,
             config_entry_removed: removed,
+            ...(msalForgotten !== undefined
+              ? { microsoft_tokens_removed: msalForgotten }
+              : {}),
             local_mail: deleteLocal ? "queued_for_deletion" : "kept",
             surface: "settings_page",
           });

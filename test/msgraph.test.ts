@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   authState,
   fetchBody,
+  forgetAccount,
   GraphHTTPError,
   sync,
   type RequestFn,
@@ -446,33 +447,45 @@ describe("on-demand body fetch (graph)", () => {
  */
 describe("MSAL token cache at rest", () => {
   /**
-   * Unified-schema cache with one signed-in account. The tenantProfiles entry
-   * is what makes MSAL report the username (it is the tenant profile, not the
-   * account entity, that account info is built from) and each profile really
-   * is a JSON *string* in the serialized form — see Deserializer.
+   * Unified-schema cache with one signed-in account per username. The
+   * tenantProfiles entry is what makes MSAL report the username (it is the
+   * tenant profile, not the account entity, that account info is built from)
+   * and each profile really is a JSON *string* in the serialized form — see
+   * Deserializer. Each account carries a refresh token whose secret is
+   * `rt-secret-<username>`, so tests can assert on what remains on disk.
    */
-  function cacheJson(username: string): string {
-    return JSON.stringify({
-      Account: {
-        "uid.utid-login.microsoftonline.com-utid": {
-          home_account_id: "uid.utid",
+  function cacheJson(...usernames: string[]): string {
+    const Account: Record<string, unknown> = {};
+    const RefreshToken: Record<string, unknown> = {};
+    usernames.forEach((username, i) => {
+      const uid = `uid${i}`;
+      Account[`${uid}.utid-login.microsoftonline.com-utid`] = {
+        home_account_id: `${uid}.utid`,
+        environment: "login.microsoftonline.com",
+        realm: "utid",
+        local_account_id: uid,
+        username,
+        client_info: "",
+        authority_type: "MSSTS",
+        tenantProfiles: [
+          JSON.stringify({
+            tenantId: "utid",
+            localAccountId: uid,
+            username,
+            isHomeTenant: true,
+          }),
+        ],
+      };
+      RefreshToken[`${uid}.utid-login.microsoftonline.com-refreshtoken-cid--`] =
+        {
+          home_account_id: `${uid}.utid`,
           environment: "login.microsoftonline.com",
-          realm: "utid",
-          local_account_id: "uid",
-          username,
-          client_info: "",
-          authority_type: "MSSTS",
-          tenantProfiles: [
-            JSON.stringify({
-              tenantId: "utid",
-              localAccountId: "uid",
-              username,
-              isHomeTenant: true,
-            }),
-          ],
-        },
-      },
+          credential_type: "RefreshToken",
+          client_id: "cid",
+          secret: `rt-secret-${username}`,
+        };
     });
+    return JSON.stringify({ Account, RefreshToken });
   }
 
   it("is written encrypted, and read back", async () => {
@@ -528,5 +541,29 @@ describe("MSAL token cache at rest", () => {
     const names = fs.readdirSync(layout.credentials);
     expect(names).toContain("msal_token_cache.enc");
     expect(names).not.toContain("msal_token_cache.json");
+  });
+
+  it("forgetAccount drops one account's refresh token and keeps the rest", async () => {
+    const layout = makeLayout();
+    const enc = path.join(layout.credentials, "msal_token_cache.enc");
+    const other = { ...ACCT, address: "other@outlook.com" };
+    await writeSealedFile(
+      layout,
+      enc,
+      cacheJson("m@outlook.com", "other@outlook.com"),
+    );
+    expect(await authState(layout, ACCT)).toBe("ok");
+
+    expect(await forgetAccount(layout, ACCT)).toBe(true);
+
+    expect(await authState(layout, ACCT)).toBe("needs_login");
+    expect(await authState(layout, other)).toBe("ok");
+    // the refresh token itself left the disk, not just the account listing —
+    // and the shared cache still holds the other account's
+    const rest = (await readSealedFile(layout, enc)) ?? "";
+    expect(rest).not.toContain("rt-secret-m@outlook.com");
+    expect(rest).toContain("rt-secret-other@outlook.com");
+    // forgetting an address with nothing cached reports that honestly
+    expect(await forgetAccount(layout, ACCT)).toBe(false);
   });
 });

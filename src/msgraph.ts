@@ -268,6 +268,38 @@ export async function acquireTokenSilentFor(
   }
 }
 
+/**
+ * Drop one account from the shared MSAL token cache, so removing a mailbox
+ * really deletes its refresh token from this computer. The cache file is
+ * shared by every Microsoft account: only entities matching this username go
+ * (msal removes the account row and its tokens together), and removeAccount
+ * marks the cache changed, which is what makes the encrypted cachePlugin
+ * write persist the pruned cache. Returns true when something was removed.
+ */
+export async function forgetAccount(
+  layout: Layout,
+  acct: AccountConfig,
+): Promise<boolean> {
+  if (!acct.client_id || !acct.address) return false;
+  try {
+    const cache = buildApp(layout, acct.client_id).getTokenCache();
+    const wanted = acct.address.toLowerCase();
+    // same user in several tenants = several account entities, one per realm
+    const matches = (await cache.getAllAccounts()).filter(
+      (a) => a.username.toLowerCase() === wanted,
+    );
+    for (const account of matches) {
+      await cache.removeAccount(account);
+    }
+    return matches.length > 0;
+  } catch (err) {
+    log.warn(
+      `microsoft: could not remove ${acct.address} from the token cache: ${err}`,
+    );
+    return false;
+  }
+}
+
 export function openBrowser(url: string): void {
   try {
     if (process.platform === "darwin") {
