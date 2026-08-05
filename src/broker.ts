@@ -36,7 +36,11 @@ import {
   removeAccountFromFile,
   saveSettingsPage,
 } from "./config.js";
-import { gmailAppPassword, storeGmailAppPassword } from "./creds.js";
+import {
+  gmailAppPassword,
+  storeGmailAppPassword,
+  deleteGmailAppPassword,
+} from "./creds.js";
 import * as gmail from "./gmail.js";
 import { GmailSetupFlow } from "./gmail_setup.js";
 import { SettingsPageFlow } from "./settings_page.js";
@@ -574,7 +578,7 @@ export class Broker {
     const summary: Record<string, string> = {};
     for (const acct of cfg.accounts) {
       if (acct.provider === "gmail") {
-        const password = gmailAppPassword(this.layout, cfg, acct.address);
+        const password = await gmailAppPassword(this.layout, cfg, acct.address);
         if (!password) summary[acct.address] = "no_app_password";
         else if (!/^[\x00-\x7f]*$/.test(password))
           summary[acct.address] = "bad_app_password";
@@ -615,7 +619,7 @@ export class Broker {
         }
       } else if (acct.provider === "gmail") {
         if (this.gmailSetup.autoAttempted.has(address)) continue;
-        if (gmailAppPassword(this.layout, cfg, acct.address)) continue;
+        if (await gmailAppPassword(this.layout, cfg, acct.address)) continue;
         this.gmailSetup.autoAttempted.add(address);
         try {
           await this.startGmailSetup(address);
@@ -636,8 +640,8 @@ export class Broker {
   private async startGmailSetup(address: string): Promise<string> {
     return this.gmailSetup.ensureFlow(address, {
       autoOpen: true,
-      onStored: (addr, password) =>
-        storeGmailAppPassword(this.layout, addr, password),
+      onStored: async (addr, password) =>
+        await storeGmailAppPassword(this.layout, addr, password),
     });
   }
 
@@ -1399,11 +1403,7 @@ export class Broker {
             this.layout.configPath,
             address,
           );
-          const credential = path.join(
-            this.layout.credentials,
-            `gmail_app_pw.${address}`,
-          );
-          fs.rmSync(credential, { force: true });
+          await deleteGmailAppPassword(this.layout, address);
           // Sync bookkeeping is dead either way — the account no longer syncs.
           // Messages are NOT touched here: "keep the local copy" means the user
           // can still read that mail, so those rows only go with the files (see

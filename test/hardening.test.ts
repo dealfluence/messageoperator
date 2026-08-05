@@ -67,13 +67,15 @@ describe("ambient gmail password binding", () => {
       accounts: [{ provider: "gmail", address: "attacker@gmail.com" }],
     });
     const env = { MESSAGEOPERATOR_GMAIL_APP_PW: "abcdabcdabcdabcd" };
-    expect(gmailAppPassword(layout, cfg, "attacker@gmail.com", env)).toBeNull();
+    expect(
+      await gmailAppPassword(layout, cfg, "attacker@gmail.com", env),
+    ).toBeNull();
     // with the env address set, it binds only to that address
     const named = { ...env, MESSAGEOPERATOR_GMAIL_ADDRESS: "me@gmail.com" };
     expect(
-      gmailAppPassword(layout, cfg, "attacker@gmail.com", named),
+      await gmailAppPassword(layout, cfg, "attacker@gmail.com", named),
     ).toBeNull();
-    expect(gmailAppPassword(layout, cfg, "me@gmail.com", named)).toBe(
+    expect(await gmailAppPassword(layout, cfg, "me@gmail.com", named)).toBe(
       "abcdabcdabcdabcd",
     );
   });

@@ -229,7 +229,11 @@ describe("broker settings integration", () => {
       return "http://127.0.0.1:9999/settings/fake";
     };
     // connected account with credential and some local mail
-    storeGmailAppPassword(broker.layout, "a@gmail.com", "abcdefghijklmnop");
+    await storeGmailAppPassword(
+      broker.layout,
+      "a@gmail.com",
+      "abcdefghijklmnop",
+    );
     await broker.runCycle({ syncNetwork: false }); // creates account dirs + baseline
     const inbox = path.join(
       broker.layout.accounts,
@@ -246,7 +250,7 @@ describe("broker settings integration", () => {
       JSON.stringify({ ts: "now" }),
     );
     await broker.push(); // opens page, captures hooks
-    hooks.onRemoveAccount("a@gmail.com", true); // the human clicks Remove
+    await hooks.onRemoveAccount("a@gmail.com", true); // the human clicks Remove
 
     const credential = path.join(
       broker.layout.credentials,
@@ -319,7 +323,7 @@ describe("broker settings integration", () => {
       "[Gmail]/All Mail",
     );
 
-    hooks.onRemoveAccount("a@gmail.com", true);
+    await hooks.onRemoveAccount("a@gmail.com", true);
     await broker.push(); // pending removal executes this cycle
 
     // the removed account leaves nothing behind for `mail index` to list
@@ -367,7 +371,7 @@ describe("broker settings integration", () => {
       body: "kept mail",
     });
 
-    hooks.onRemoveAccount("a@gmail.com", false);
+    await hooks.onRemoveAccount("a@gmail.com", false);
     await broker.push();
 
     expect(broker.index.getBySha("cccccccccccc")).not.toBeNull();
@@ -448,7 +452,7 @@ describe("broker settings integration", () => {
       JSON.stringify({ ts: "now" }),
     );
     await broker.push();
-    hooks.onSaveSafety({
+    await hooks.onSaveSafety({
       dry_run: false,
       allowed_recipient_domains: ["example.com"],
     });

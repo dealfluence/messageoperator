@@ -130,7 +130,7 @@ function fixtures() {
   });
   const opts = {
     clientFactory: async () => client,
-    getPassword: () => "abcdabcdabcdabcd",
+    getPassword: async () => "abcdabcdabcdabcd",
   };
   return { layout, index, ledger, cfg, client, opts };
 }
@@ -209,7 +209,7 @@ describe("gmail sync", () => {
     const { layout, index, ledger, cfg, client } = fixtures();
     await sync(layout, index, ledger, cfg, new Set(), {
       clientFactory: async () => client,
-      getPassword: () => null,
+      getPassword: async () => null,
     });
     expect(client.calls).toEqual([]);
     expect(index.allMessages()).toEqual([]);
@@ -314,7 +314,7 @@ describe("on-demand body fetch (gmail)", () => {
       ],
       {
         clientFactory: async () => client,
-        getPassword: () => "abcdabcdabcdabcd",
+        getPassword: async () => "abcdabcdabcdabcd",
       },
     );
     expect(got.get("gm:g1")).toEqual(raw);
@@ -336,7 +336,7 @@ describe("on-demand body fetch (gmail)", () => {
       [{ sha: "gm:uid:9", providerMsgId: "uid:9" }],
       {
         clientFactory: async () => client,
-        getPassword: () => "abcdabcdabcdabcd",
+        getPassword: async () => "abcdabcdabcdabcd",
       },
     );
     expect(got.get("gm:uid:9")).toEqual(raw);

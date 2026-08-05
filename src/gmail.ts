@@ -228,7 +228,11 @@ export interface GmailSyncOptions {
   clientFactory?: GmailClientFactory;
   connCache?: ConnectionCache;
   /** injectable for tests; default reads creds files / env */
-  getPassword?: (layout: Layout, cfg: Config, address: string) => string | null;
+  getPassword?: (
+    layout: Layout,
+    cfg: Config,
+    address: string,
+  ) => Promise<string | null>;
   /**
    * Absolute time (opts.now clock) the historical backfill must yield by.
    * The broker passes cycle start + ~2.5s so a backlog never stretches a
@@ -254,7 +258,7 @@ export async function sync(
   try {
     for (const acct of accountsFor(cfg, "gmail")) {
       const address = acct.address;
-      const password = getPassword(layout, cfg, address);
+      const password = await getPassword(layout, cfg, address);
       if (!password) {
         log.info(`gmail: ${address} configured but no app password; skipping`);
         continue;
@@ -818,7 +822,7 @@ export async function fetchBodies(
   const out = new Map<string, Buffer>();
   if (!wants.length) return out;
   const getPassword = opts.getPassword ?? gmailAppPassword;
-  const password = getPassword(layout, cfg, acct.address);
+  const password = await getPassword(layout, cfg, acct.address);
   if (!password) {
     throw new Rejection(
       "needs_auth",
@@ -910,7 +914,7 @@ export async function sendMime(
   } = {},
 ): Promise<void> {
   const getPassword = opts.getPassword ?? gmailAppPassword;
-  const password = getPassword(layout, cfg, acct.address);
+  const password = await getPassword(layout, cfg, acct.address);
   if (!password) {
     throw new Rejection(
       "delivery_unavailable",
@@ -985,7 +989,7 @@ export async function applyFolderChange(
   opts: GmailSyncOptions = {},
 ): Promise<"applied" | "noop"> {
   const getPassword = opts.getPassword ?? gmailAppPassword;
-  const password = getPassword(layout, cfg, acct.address);
+  const password = await getPassword(layout, cfg, acct.address);
   if (!password) {
     throw new Rejection(
       "needs_auth",
@@ -1095,7 +1099,7 @@ export async function uploadDraft(
   opts: GmailSyncOptions = {},
 ): Promise<{ uid?: number; mailbox: string }> {
   const getPassword = opts.getPassword ?? gmailAppPassword;
-  const password = getPassword(layout, cfg, acct.address);
+  const password = await getPassword(layout, cfg, acct.address);
   if (!password) {
     throw new Rejection(
       "needs_auth",
@@ -1135,7 +1139,7 @@ export async function deleteDraft(
   opts: GmailSyncOptions = {},
 ): Promise<"applied" | "noop"> {
   const getPassword = opts.getPassword ?? gmailAppPassword;
-  const password = getPassword(layout, cfg, acct.address);
+  const password = await getPassword(layout, cfg, acct.address);
   if (!password) {
     throw new Rejection(
       "needs_auth",

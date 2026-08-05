@@ -114,7 +114,7 @@ function assertNeverDestructive(calls: string[]): void {
 function gmailOpts(client: FakeFolderImap) {
   return {
     clientFactory: async () => client,
-    getPassword: () => "pw",
+    getPassword: async () => "pw",
   };
 }
 
@@ -219,7 +219,7 @@ describe("gmail applyFolderChange", () => {
     await expect(
       applyFolderChange(layout, makeConfig(), GMAIL_ACCT, ARCHIVE, {
         clientFactory: async () => client,
-        getPassword: () => null,
+        getPassword: async () => null,
       }),
     ).rejects.toThrow(Rejection);
     expect(client.calls).toEqual([]);
@@ -302,7 +302,7 @@ describe("gmail provider drafts", () => {
     await expect(
       gmailUploadDraft(layout, makeConfig(), GMAIL_ACCT, Buffer.from("x"), {
         clientFactory: async () => client,
-        getPassword: () => null,
+        getPassword: async () => null,
       }),
     ).rejects.toThrow(Rejection);
     expect(client.calls).toEqual([]);

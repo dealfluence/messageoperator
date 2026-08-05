@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 function envVal(suffix) {
   return (
@@ -76,6 +77,41 @@ export function gmailPassword(address) {
   if (envPw && envAddr && envAddr === address.toLowerCase()) {
     return envPw.replace(/\s+/g, "");
   }
+
+  const platform = os.platform();
+  if (platform === "darwin") {
+    try {
+      const stdout = execFileSync(
+        "security",
+        ["find-generic-password", "-a", address, "-s", "messageoperator", "-w"],
+        { encoding: "utf-8" },
+      );
+      return stdout.trim().replace(/\s+/g, "");
+    } catch {
+      /* fallback to legacy file */
+    }
+  } else if (platform === "win32") {
+    const xmlFile = path.join(
+      stateHome(),
+      "broker",
+      "credentials",
+      `gmail_app_pw.${address.toLowerCase()}.xml`,
+    );
+    if (fs.existsSync(xmlFile)) {
+      try {
+        const script = `$cred = New-Object System.Management.Automation.PSCredential 'dummy', (Import-Clixml -Path '${xmlFile.replace(/'/g, "''")}'); $cred.GetNetworkCredential().Password`;
+        const stdout = execFileSync(
+          "powershell.exe",
+          ["-NoProfile", "-Command", script],
+          { encoding: "utf-8" },
+        );
+        return stdout.trim().replace(/\s+/g, "");
+      } catch {
+        /* fallback to legacy file */
+      }
+    }
+  }
+
   const file = path.join(
     stateHome(),
     "broker",

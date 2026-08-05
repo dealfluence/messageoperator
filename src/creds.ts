@@ -13,12 +13,16 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import type { Config } from "./config.js";
 import { cleanEnvValue } from "./config.js";
 import type { Layout } from "./layout.js";
 
+const execFileAsync = promisify(execFile);
 export const APP_PW_ENV = "MESSAGEOPERATOR_GMAIL_APP_PW";
 
 /**
@@ -31,6 +35,10 @@ export function normalizeAppPassword(value: string): string {
 
 function pwFile(layout: Layout, address: string): string {
   return path.join(layout.credentials, `gmail_app_pw.${address.toLowerCase()}`);
+}
+
+function xmlFile(layout: Layout, address: string): string {
+  return pwFile(layout, address) + ".xml";
 }
 
 function envAppliesTo(
@@ -50,18 +58,50 @@ function envAppliesTo(
   return !!envAddr && envAddr === address.toLowerCase();
 }
 
-export function gmailAppPassword(
+export async function gmailAppPassword(
   layout: Layout,
   cfg: Config,
   address: string,
   env: NodeJS.ProcessEnv = process.env,
-): string | null {
+): Promise<string | null> {
   if (envAppliesTo(cfg, address, env)) {
     const value = normalizeAppPassword(cleanEnvValue(env, APP_PW_ENV) ?? "");
     if (value) return value;
   }
-  // per-address file only — a shared/legacy fallback would attach a stored
-  // credential to agent-added accounts (see envAppliesTo)
+
+  const platform = os.platform();
+  if (platform === "darwin") {
+    try {
+      const { stdout } = await execFileAsync("security", [
+        "find-generic-password",
+        "-a",
+        address,
+        "-s",
+        "messageoperator",
+        "-w",
+      ]);
+      return normalizeAppPassword(stdout.trim());
+    } catch {
+      /* fallback to legacy file */
+    }
+  } else if (platform === "win32") {
+    const out = xmlFile(layout, address);
+    if (fs.existsSync(out)) {
+      try {
+        const script = `$cred = New-Object System.Management.Automation.PSCredential 'dummy', (Import-Clixml -Path '${out.replace(/'/g, "''")}'); $cred.GetNetworkCredential().Password`;
+        const { stdout } = await execFileAsync("powershell.exe", [
+          "-NoProfile",
+          "-Command",
+          script,
+        ]);
+        return normalizeAppPassword(stdout.trim());
+      } catch {
+        /* fallback to legacy file */
+      }
+    }
+  }
+
+  // Fallback for Linux/Docker, OR graceful migration for users with an existing plain-text file
   try {
     const value = normalizeAppPassword(
       fs.readFileSync(pwFile(layout, address), "utf-8"),
@@ -73,15 +113,61 @@ export function gmailAppPassword(
   return null;
 }
 
-export function storeGmailAppPassword(
+export async function storeGmailAppPassword(
   layout: Layout,
   address: string,
   password: string,
-): void {
+): Promise<void> {
   layout.ensureBroker();
-  const file = pwFile(layout, address);
-  fs.writeFileSync(file, normalizeAppPassword(password) + "\n");
-  if (process.platform !== "win32") {
+  const norm = normalizeAppPassword(password);
+  const platform = os.platform();
+
+  if (platform === "darwin") {
+    // -U creates or updates if it already exists
+    await execFileAsync("security", [
+      "add-generic-password",
+      "-a",
+      address,
+      "-s",
+      "messageoperator",
+      "-w",
+      norm,
+      "-U",
+    ]);
+  } else if (platform === "win32") {
+    const out = xmlFile(layout, address);
+    // DPAPI locks it to the current Windows user's context securely
+    const script = `$pw = ConvertTo-SecureString -String '${norm.replace(/'/g, "''")}' -AsPlainText -Force; $pw | Export-Clixml -Path '${out.replace(/'/g, "''")}'`;
+    await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script]);
+  } else {
+    // Docker/Linux plaintext strategy
+    const file = pwFile(layout, address);
+    fs.writeFileSync(file, norm + "\n");
     fs.chmodSync(file, 0o600);
   }
+}
+
+export async function deleteGmailAppPassword(
+  layout: Layout,
+  address: string,
+): Promise<void> {
+  const platform = os.platform();
+  if (platform === "darwin") {
+    try {
+      await execFileAsync("security", [
+        "delete-generic-password",
+        "-a",
+        address,
+        "-s",
+        "messageoperator",
+      ]);
+    } catch {
+      /* Already gone or never existed */
+    }
+  } else if (platform === "win32") {
+    fs.rmSync(xmlFile(layout, address), { force: true });
+  }
+
+  // Always clean up the legacy fallback plain-text file just in case
+  fs.rmSync(pwFile(layout, address), { force: true });
 }

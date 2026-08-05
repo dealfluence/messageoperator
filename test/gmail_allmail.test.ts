@@ -150,7 +150,7 @@ function run(client: GmailClientLike, deadline = Infinity, now?: () => number) {
   const cfg = makeConfig({ accounts: [ACCT] });
   const opts = {
     clientFactory: async () => client,
-    getPassword: () => "abcdabcdabcdabcd",
+    getPassword: async () => "abcdabcdabcdabcd",
     historyDeadline: deadline,
     now,
   };

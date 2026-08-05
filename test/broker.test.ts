@@ -802,7 +802,11 @@ describe("boundary broker", () => {
 
   it("does not open the gmail wizard when a password is already stored", async () => {
     const broker = makeBroker();
-    storeGmailAppPassword(broker.layout, "a@gmail.com", "abcdefghijklmnop");
+    await storeGmailAppPassword(
+      broker.layout,
+      "a@gmail.com",
+      "abcdefghijklmnop",
+    );
     const started: string[] = [];
     broker.gmailSetup.ensureFlow = async (address) => {
       started.push(address);
