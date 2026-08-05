@@ -67,7 +67,7 @@ function sqlite(): typeof import("node:sqlite") {
   const mod = process.getBuiltinModule?.("node:sqlite");
   if (!mod) {
     throw new Error(
-      "the built-in 'node:sqlite' module is unavailable — Mailroom needs Node 22.13+ (24 recommended)",
+      "the built-in 'node:sqlite' module is unavailable — Message Operator needs Node 22.13+ (24 recommended)",
     );
   }
   return mod;

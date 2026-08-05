@@ -883,7 +883,7 @@ export function finalMime(
     bodyPartHeaders.push('Content-Type: text/plain; charset="utf-8"');
   }
 
-  const boundary = "mailroom-" + sha12(raw);
+  const boundary = "messageoperator-" + sha12(raw);
   const out: string[] = [];
   out.push(...topHeaders);
   out.push("MIME-Version: 1.0");

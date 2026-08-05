@@ -14,13 +14,13 @@ describe("ProgressTracker", () => {
 
   it("tracks steps, closing the previous one on each step()", () => {
     const t = new ProgressTracker();
-    const seq = t.begin("mailroom_bash");
+    const seq = t.begin("messageoperator_bash");
     expect(seq).toBe(1);
     t.step("pulling new mail");
     t.step("running command");
     const snap = t.snapshot();
     expect(snap.active).toBe(true);
-    expect(snap.tool).toBe("mailroom_bash");
+    expect(snap.tool).toBe("messageoperator_bash");
     expect(snap.current).toBe("running command");
     expect(snap.steps).toHaveLength(2);
     expect(snap.steps[0]!.endedAt).toBeTypeOf("number");
@@ -29,7 +29,7 @@ describe("ProgressTracker", () => {
 
   it("end() closes the last step and deactivates", () => {
     const t = new ProgressTracker();
-    t.begin("mailroom_view");
+    t.begin("messageoperator_view");
     t.step("reading");
     t.end();
     const snap = t.snapshot();

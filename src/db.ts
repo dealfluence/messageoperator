@@ -2,7 +2,7 @@
  * SQLite schema + connection for the broker store (broker/store.db), on
  * Node's built-in `node:sqlite` (DatabaseSync) — a builtin, not a native
  * module, so the MCPB bundle stays prebuild-free. Ported from the ingest
- * POC's db.mjs and adapted to the mailroom state model.
+ * POC's db.mjs and adapted to the messageoperator state model.
  *
  * All DDL is IF NOT EXISTS and re-runnable — opening an existing store is a
  * no-op. WAL mode so the in-room `mail` CLI (a separate process, read-only)
@@ -29,7 +29,7 @@ function sqlite(): typeof import("node:sqlite") {
   const mod = process.getBuiltinModule?.("node:sqlite");
   if (!mod) {
     throw new Error(
-      "the built-in 'node:sqlite' module is unavailable — Mailroom needs Node 22.13+ (24 recommended)",
+      "the built-in 'node:sqlite' module is unavailable — Message Operator needs Node 22.13+ (24 recommended)",
     );
   }
   return mod;
@@ -177,7 +177,7 @@ function openAndMigrate(dbPath: string): DatabaseSync {
 }
 
 /**
- * Best-effort FTS5 index creation. MAILROOM_DISABLE_FTS5=1 skips it (test
+ * Best-effort FTS5 index creation. MESSAGEOPERATOR_DISABLE_FTS5=1 skips it (test
  * seam / operational escape hatch); a runtime without the fts5 module gets
  * the failure remembered in meta so later opens don't retry noisily.
  */
@@ -185,7 +185,10 @@ function ensureFts(db: DatabaseSync): void {
   const flagged = db
     .prepare("SELECT value FROM meta WHERE key='fts5'")
     .get() as { value: string } | undefined;
-  if (process.env.MAILROOM_DISABLE_FTS5 === "1" || flagged?.value === "0") {
+  if (
+    process.env.MESSAGEOPERATOR_DISABLE_FTS5 === "1" ||
+    flagged?.value === "0"
+  ) {
     return;
   }
   try {

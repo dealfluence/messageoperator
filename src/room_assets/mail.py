@@ -56,7 +56,7 @@ BROKER_STALE_SECS = 90
 # Max body bytes emitted per `mail read` call. Kept well under the MCP client's
 # tool-result ceiling so a single part never gets clipped by the server-side
 # boundary budget. Deliberately hardcoded: mail.py is stdlib-only and decoupled
-# from the broker's config, so it does not read MAILROOM_RESULT_BUDGET.
+# from the broker's config, so it does not read MESSAGEOPERATOR_RESULT_BUDGET.
 READ_PART_BYTES = 60_000
 NO_INDEX = "(index not built yet; broker has not run)"
 SIDECAR_SCHEMA_VERSION = 1  # must match tabular_store.ts SIDECAR_SCHEMA_VERSION
@@ -137,7 +137,7 @@ usage: mail <verb> [args]
       the message; --name picks one. --to must be your sandbox outputs/uploads
       folder. This is the only command that writes outside the room.
   mail settings
-      Open the Mailroom settings page in the user's browser (dry run,
+      Open the Message Operator settings page in the user's browser (dry run,
       allowed recipient domains, remove mailboxes). You can open it; only
       the USER can change anything there - never ask them to relay
       settings through chat.
@@ -435,7 +435,7 @@ def print_disconnected_note(records, connected):
     count = sum(1 for r in records if is_disconnected(r.get("account"), connected))
     print(
         f"NOTE: {count} of the rows above are marked {DISCONNECTED_MARK} — their "
-        f"mailbox ({', '.join(orphaned)}) was REMOVED from Mailroom. They are a "
+        f"mailbox ({', '.join(orphaned)}) was REMOVED from Message Operator. They are a "
         f"local archive, not live mail: nothing new arrives, and archive/send/"
         f"fetch on them will be rejected. Reconnect with "
         f"{' or '.join('`mail login ' + a + '`' for a in orphaned)}."
@@ -768,7 +768,7 @@ def new_message(from_addr, to, subject, body):
     msg["To"] = to
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
-    domain = from_addr.rsplit("@", 1)[-1] if "@" in from_addr else "mailroom"
+    domain = from_addr.rsplit("@", 1)[-1] if "@" in from_addr else "messageoperator"
     msg["Message-ID"] = make_msgid(domain=domain)
     # Wrap for format=flowed so provider-side quoted-printable re-encoding
     # never needs a 76-col soft wrap (the source of stray '=' in received
@@ -856,8 +856,8 @@ def broker_running(status):
 def predict_send(status, recipients):
     if not broker_running(status):
         return (
-            "the broker does not appear to be running (run `mailroom serve` or "
-            "`mailroom broker`); the send is queued and will go out once it runs"
+            "the broker does not appear to be running (run `messageoperator serve` or "
+            "`messageoperator broker`); the send is queued and will go out once it runs"
         )
     own = set(status.get("own_addresses", []))
     allowed = set(status.get("allowed_recipient_domains", []))
@@ -1134,7 +1134,7 @@ def cmd_read(args):
         if p.is_file():
             if orphaned:
                 print(
-                    f"NOTE: {record['account']} was REMOVED from Mailroom; this is a "
+                    f"NOTE: {record['account']} was REMOVED from Message Operator; this is a "
                     f"local archive copy, not live mail. Reconnect with "
                     f"`mail login {record['account']}`."
                 )
@@ -1159,7 +1159,7 @@ def cmd_read(args):
         # that cannot succeed
         print(
             f"[DISCONNECTED] Body not on disk, and {record['account']} was REMOVED "
-            f"from Mailroom — it cannot be downloaded. Only the metadata above was "
+            f"from Message Operator — it cannot be downloaded. Only the metadata above was "
             f"kept. Reconnect with `mail login {record['account']}` to make this "
             f"message readable again."
         )
@@ -1577,8 +1577,8 @@ def cmd_status(args):
     if status is None:
         print("broker: NOT RUNNING (no status published yet)")
         print(
-            "`mailroom serve` runs the broker at tool-call boundaries; "
-            "`mailroom broker` is the standalone poll loop."
+            "`messageoperator serve` runs the broker at tool-call boundaries; "
+            "`messageoperator broker` is the standalone poll loop."
         )
         return OK
     age = broker_age_seconds(status)
@@ -2031,7 +2031,7 @@ def cmd_settings(args):
     SETTINGS_REQUEST_FILE.write_text(json.dumps({"ts": now_iso()}), encoding="utf-8")
     print(
         "SETTINGS page requested: when this tool call ends, the broker opens "
-        "the Mailroom settings page in the user's browser (dry run, allowed "
+        "the Message Operator settings page in the user's browser (dry run, allowed "
         "recipient domains, mailbox removal). Only the user can change "
         "anything there. Tell the user to look at their browser."
     )

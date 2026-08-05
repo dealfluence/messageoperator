@@ -36,7 +36,7 @@ from pathlib import Path
 # of src/). Allow override for unusual layouts.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAIL_PY_SRC = Path(
-    os.environ.get("MAILROOM_MAIL_PY", REPO_ROOT / "src" / "room_assets" / "mail.py")
+    os.environ.get("MESSAGEOPERATOR_MAIL_PY", REPO_ROOT / "src" / "room_assets" / "mail.py")
 )
 
 
@@ -58,10 +58,10 @@ def load_mail_module(py_path):
 # suite therefore exits 2 with BRIDGE_UNAVAILABLE_MSG — the 9 CI-only
 # failures of 2026-07-29 (green on Windows/macOS, whose tempdirs carry no
 # marker). The repo checkout is marker-free everywhere this suite runs;
-# MAILROOM_TEST_SCRATCH overrides for checkouts that are not (e.g. a clone
+# MESSAGEOPERATOR_TEST_SCRATCH overrides for checkouts that are not (e.g. a clone
 # under /tmp itself, or under a sandbox home).
 SCRATCH_BASE = Path(
-    os.environ.get("MAILROOM_TEST_SCRATCH", REPO_ROOT / "test" / ".scratch")
+    os.environ.get("MESSAGEOPERATOR_TEST_SCRATCH", REPO_ROOT / "test" / ".scratch")
 )
 
 
@@ -77,7 +77,7 @@ def _scratch_base_problem():
             "sandbox-VM path (_SANDBOX_VM_MARKERS in mail.py), so every "
             "import/export would be refused as bridge-unavailable. That is an "
             "environment problem, not a mail.py bug — do NOT widen the marker "
-            "list; set MAILROOM_TEST_SCRATCH to a marker-free directory."
+            "list; set MESSAGEOPERATOR_TEST_SCRATCH to a marker-free directory."
         )
     return None
 
@@ -94,7 +94,7 @@ class MailCliTestBase(unittest.TestCase):
         # <home>/room is the room root; mail.py resolves ROOM as its own
         # parent.parent, so it must live at <room>/bin/mail.py
         SCRATCH_BASE.mkdir(parents=True, exist_ok=True)
-        self.home = Path(tempfile.mkdtemp(prefix="mailroom-pytest-", dir=SCRATCH_BASE))
+        self.home = Path(tempfile.mkdtemp(prefix="messageoperator-pytest-", dir=SCRATCH_BASE))
         self.room = self.home / "room"
         self.bin = self.room / "bin"
         self.accounts = self.room / "accounts"
@@ -720,7 +720,7 @@ class ExportTests(MailCliTestBase):
         Cowork session mount — not merely a directory that happens to be called
         outputs/ or uploads/. A folder name is not a capability: ordinary project
         directories are called `outputs` all the time (there is one in a sibling
-        repo on the maintainer's own machine), and `mailroom_bash` runs an
+        repo on the maintainer's own machine), and `messageoperator_bash` runs an
         unsandboxed shell as the user, so `mkdir ~/outputs` is a one-liner. If
         the name alone were sufficient, a prompt-injected attachment could route
         mail contents anywhere the user can write.
@@ -1652,7 +1652,7 @@ class DisconnectedMailboxTests(MailCliTestBase):
         self.assertIn("[disconnected]", gone[0])
         self.assertNotIn("[disconnected]", live[0])
         # the explanation and the undo command travel with the listing
-        self.assertIn("was REMOVED from Mailroom", proc.stdout)
+        self.assertIn("was REMOVED from Message Operator", proc.stdout)
         self.assertIn(f"mail login {self.GONE}", proc.stdout)
         self.assertIn("local archive", proc.stdout)
 
@@ -1661,7 +1661,7 @@ class DisconnectedMailboxTests(MailCliTestBase):
         self._status([self.LIVE])
         proc = self.run_mail("search", "correspondence", expect_code=0)
         self.assertIn("[disconnected]", proc.stdout)
-        self.assertIn("was REMOVED from Mailroom", proc.stdout)
+        self.assertIn("was REMOVED from Message Operator", proc.stdout)
 
     def test_nothing_is_marked_when_all_accounts_are_connected(self):
         self._store()
@@ -1714,7 +1714,7 @@ class DisconnectedMailboxTests(MailCliTestBase):
         self._store(gone_on_disk=True)
         self._status([self.LIVE])
         proc = self.run_mail("read", "gonesha00000", expect_code=0)
-        self.assertIn("was REMOVED from Mailroom", proc.stdout)
+        self.assertIn("was REMOVED from Message Operator", proc.stdout)
         self.assertIn("local archive copy", proc.stdout)
         self.assertIn("old body text", proc.stdout)  # still readable
 

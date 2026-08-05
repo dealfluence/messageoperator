@@ -1,17 +1,17 @@
 {
-  "name": "mailroom",
+  "name": "messageoperator",
   "version": "0.6.0",
-  "description": "Mailroom POC3: a local MCP server that presents email as a small computer (macOS, MCPB)",
+  "description": "Message Operator: a local MCP server that presents mailboxes as a small computer (macOS, MCPB)",
   "type": "module",
   "license": "BUSL-1.1",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dealfluence/Message-Operator.git"
+    "url": "git+https://github.com/dealfluence/messageoperator.git"
   },
   "bugs": {
-    "url": "https://github.com/dealfluence/Message-Operator/issues"
+    "url": "https://github.com/dealfluence/messageoperator/issues"
   },
-  "homepage": "https://github.com/dealfluence/Message-Operator#readme",
+  "homepage": "https://github.com/dealfluence/messageoperator#readme",
   "engines": {
     "node": ">=24"
   },
@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit && tsc -p ui",
     "test": "vitest run && npm run test:ingest && npm run test:mail",
     "test:ingest": "node --experimental-sqlite --test \"ingest/test/*.test.mjs\"",
-    "pack:mcpb": "npm run build && mcpb pack bundle mailroom.mcpb",
+    "pack:mcpb": "npm run build && mcpb pack bundle messageoperator.mcpb",
     "test:mail": "uv run python -m unittest discover -s test -p \"test_mail_py.py\"",
     "prepare": "husky",
     "lint": "eslint .",
@@ -36,7 +36,7 @@
     ]
   },
   "dependencies": {
-    "@adeu/core": "^1.30.0",
+    "@adeu/core": "^1.31.0",
     "@azure/msal-node": "^5.4.0",
     "@modelcontextprotocol/ext-apps": "^1.7.4",
     "@modelcontextprotocol/sdk": "^1.12.0",

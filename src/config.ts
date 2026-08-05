@@ -5,8 +5,8 @@
  * Two sources merge:
  *  - broker/config.json — the durable file (accounts list, policy)
  *  - environment — what Claude Desktop injects from MCPB user_config
- *    (MAILROOM_GMAIL_ADDRESS, MAILROOM_MS_ADDRESS, MAILROOM_MS_CLIENT_ID,
- *    MAILROOM_DRY_RUN, MAILROOM_ALLOWED_RECIPIENT_DOMAINS). Env-declared
+ *    (MESSAGEOPERATOR_GMAIL_ADDRESS, MESSAGEOPERATOR_MS_ADDRESS, MESSAGEOPERATOR_MS_CLIENT_ID,
+ *    MESSAGEOPERATOR_DRY_RUN, MESSAGEOPERATOR_ALLOWED_RECIPIENT_DOMAINS). Env-declared
  *    accounts are appended if the file does not already list them, and
  *    env dry_run wins: the extension settings pane is the primary UI on
  *    the macOS target.
@@ -54,7 +54,7 @@ export const DEFAULT_CONFIG: Config = {
 };
 
 const README_LINES = [
-  "Mailroom broker configuration.",
+  "Message Operator broker configuration.",
   "dry_run=true: everything except the network send happens (ledger: send_simulated).",
   "accounts: [{provider: 'gmail'|'microsoft', address, client_id?}] — any number per provider.",
   "Values injected by Claude Desktop (extension settings) are merged in and win for dry_run.",
@@ -131,7 +131,7 @@ function mergeEnv(cfg: Config, env: NodeJS.ProcessEnv): Config {
   // env addresses face the same shape check as every other source: they
   // become directory names, and a settings-pane typo must not wedge cycles
   const gmailAddr = (
-    cleanEnvValue(env, "MAILROOM_GMAIL_ADDRESS") ?? ""
+    cleanEnvValue(env, "MESSAGEOPERATOR_GMAIL_ADDRESS") ?? ""
   ).toLowerCase();
   if (
     isValidAccountAddress(gmailAddr) &&
@@ -140,9 +140,9 @@ function mergeEnv(cfg: Config, env: NodeJS.ProcessEnv): Config {
     cfg.accounts.push({ provider: "gmail", address: gmailAddr });
   }
   const msAddr = (
-    cleanEnvValue(env, "MAILROOM_MS_ADDRESS") ?? ""
+    cleanEnvValue(env, "MESSAGEOPERATOR_MS_ADDRESS") ?? ""
   ).toLowerCase();
-  const msClient = cleanEnvValue(env, "MAILROOM_MS_CLIENT_ID") ?? "";
+  const msClient = cleanEnvValue(env, "MESSAGEOPERATOR_MS_CLIENT_ID") ?? "";
   if (isValidAccountAddress(msAddr)) {
     const existing = cfg.accounts.find((a) => a.address === msAddr);
     if (!existing) {
@@ -162,10 +162,10 @@ function mergeEnv(cfg: Config, env: NodeJS.ProcessEnv): Config {
         acct.client_id = msClient;
     }
   }
-  const dryRun = envBool(env, "MAILROOM_DRY_RUN");
+  const dryRun = envBool(env, "MESSAGEOPERATOR_DRY_RUN");
   if (dryRun !== undefined) cfg.dry_run = dryRun;
   const domains =
-    cleanEnvValue(env, "MAILROOM_ALLOWED_RECIPIENT_DOMAINS") ?? "";
+    cleanEnvValue(env, "MESSAGEOPERATOR_ALLOWED_RECIPIENT_DOMAINS") ?? "";
   if (domains) {
     for (const d of domains.split(",")) {
       const domain = d.trim().toLowerCase().replace(/^@/, "");
@@ -292,7 +292,7 @@ export function dryRunSource(
   const data = readJsonRecord(configPath);
   const section = data.settings_page as Record<string, unknown> | undefined;
   if (section && typeof section.dry_run === "boolean") return "settings_page";
-  if (envBool(env, "MAILROOM_DRY_RUN") !== undefined)
+  if (envBool(env, "MESSAGEOPERATOR_DRY_RUN") !== undefined)
     return "extension_settings";
   if (data.dry_run !== undefined) return "config_file";
   return "default";
@@ -383,7 +383,7 @@ export function defaultMsClientId(
   cfg: Config,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const fromEnv = cleanEnvValue(env, "MAILROOM_MS_CLIENT_ID");
+  const fromEnv = cleanEnvValue(env, "MESSAGEOPERATOR_MS_CLIENT_ID");
   if (fromEnv) return fromEnv;
   const ids = new Set(
     accountsFor(cfg, "microsoft")

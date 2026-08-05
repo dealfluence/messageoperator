@@ -434,7 +434,7 @@ describe("Index (SQLite state)", () => {
 
   it("degrades to LIKE search when the runtime has no FTS5", () => {
     const layout = makeLayout();
-    process.env.MAILROOM_DISABLE_FTS5 = "1";
+    process.env.MESSAGEOPERATOR_DISABLE_FTS5 = "1";
     try {
       const index = makeIndex(layout);
       try {
@@ -487,7 +487,7 @@ describe("Index (SQLite state)", () => {
         index.close();
       }
     } finally {
-      delete process.env.MAILROOM_DISABLE_FTS5;
+      delete process.env.MESSAGEOPERATOR_DISABLE_FTS5;
     }
   });
 

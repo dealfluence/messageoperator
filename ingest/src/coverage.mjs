@@ -93,7 +93,7 @@ export function coverageReport(db) {
 /** Render the report as a human-readable string for the CLI. */
 export function formatCoverage(report) {
   const lines = [];
-  lines.push("Mailroom ingest — coverage report");
+  lines.push("Message Operator ingest — coverage report");
   lines.push(
     "(status distinguishes synced vs not-synced: a missing search hit for an",
   );

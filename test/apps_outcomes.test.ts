@@ -115,7 +115,7 @@ describe("alertChips / readBrokerStatus", () => {
   });
 
   it("returns [] for a missing or unparsable status file", () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "mailroom-outcomes-"));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "messageoperator-outcomes-"));
     expect(readBrokerStatus(dir)).toBeNull();
     fs.writeFileSync(path.join(dir, ".broker-status.json"), "{nope");
     expect(readBrokerStatus(dir)).toBeNull();
@@ -152,7 +152,7 @@ describe("buildActivityStructured", () => {
   });
 
   it("assembles the activity payload from records and status", () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "mailroom-outcomes-"));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "messageoperator-outcomes-"));
     fs.writeFileSync(
       path.join(dir, ".broker-status.json"),
       JSON.stringify({ dry_run: true, pending_intents: 0, auth: {} }),
@@ -160,7 +160,7 @@ describe("buildActivityStructured", () => {
     const startedAt = Date.now() - 1000;
     const sc = buildActivityStructured({
       seq: 7,
-      tool: "mailroom_bash",
+      tool: "messageoperator_bash",
       startedAt,
       ok: true,
       records: [rec("send_simulated", { recipients: ["x@y.com"] })],
@@ -186,10 +186,10 @@ describe("buildActivityStructured", () => {
   });
 
   it("works without a status file (no alerts, no dryRun key)", () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "mailroom-outcomes-"));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "messageoperator-outcomes-"));
     const sc = buildActivityStructured({
       seq: 1,
-      tool: "mailroom_view",
+      tool: "messageoperator_view",
       startedAt: Date.now(),
       ok: true,
       records: [],

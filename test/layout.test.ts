@@ -122,19 +122,20 @@ describe("room bootstrap", () => {
   });
 
   describe("mail shim python resolution", () => {
-    const originalPython = process.env.MAILROOM_PYTHON;
+    const originalPython = process.env.MESSAGEOPERATOR_PYTHON;
 
     afterEach(() => {
-      if (originalPython === undefined) delete process.env.MAILROOM_PYTHON;
-      else process.env.MAILROOM_PYTHON = originalPython;
+      if (originalPython === undefined)
+        delete process.env.MESSAGEOPERATOR_PYTHON;
+      else process.env.MESSAGEOPERATOR_PYTHON = originalPython;
     });
 
-    it("MAILROOM_PYTHON override wins over PATH/registry lookup", () => {
+    it("MESSAGEOPERATOR_PYTHON override wins over PATH/registry lookup", () => {
       const fakePythonDir = tmpHome();
       const fakePython = path.join(fakePythonDir, "python3");
       fs.writeFileSync(fakePython, "#!/bin/sh\nexit 0\n");
       fs.chmodSync(fakePython, 0o755);
-      process.env.MAILROOM_PYTHON = fakePython;
+      process.env.MESSAGEOPERATOR_PYTHON = fakePython;
 
       const layout = new Layout(tmpHome());
       layout.ensureRoom();

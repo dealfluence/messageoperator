@@ -28,7 +28,7 @@ export const CACHE_BOX = ".Cache";
 // maildir-windows-compatible option established).
 export const INFO_SEP = process.platform === "win32" ? "!" : ":";
 
-// `root` is the Maildir root (e.g. ~/mailroom-ingest/mail); each account gets a
+// `root` is the Maildir root (e.g. ~/messageoperator-ingest/mail); each account gets a
 // Maildir++ tree directly beneath it.
 export function accountMaildir(root, account) {
   return path.join(root, account);

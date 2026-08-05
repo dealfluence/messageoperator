@@ -2,11 +2,11 @@
  * Credential resolution for the broker — multi-account edition.
  *
  * Gmail app passwords live one file per address under broker/credentials/
- * (gmail_app_pw.<address>). The MAILROOM_GMAIL_APP_PW env var — which on the
+ * (gmail_app_pw.<address>). The MESSAGEOPERATOR_GMAIL_APP_PW env var — which on the
  * MCPB build is fed from the macOS Keychain via a sensitive user_config
- * field — applies strictly to the address named by MAILROOM_GMAIL_ADDRESS.
+ * field — applies strictly to the address named by MESSAGEOPERATOR_GMAIL_ADDRESS.
  * Additional accounts store their password with
- * `mailroom set-gmail-password --account <address>` on the host.
+ * `messageoperator set-gmail-password --account <address>` on the host.
  *
  * The credentials directory lives under broker/ — outside room/ — so the MCP
  * tools and the in-room `mail` CLI never expose it to the agent.
@@ -19,7 +19,7 @@ import type { Config } from "./config.js";
 import { cleanEnvValue } from "./config.js";
 import type { Layout } from "./layout.js";
 
-export const APP_PW_ENV = "MAILROOM_GMAIL_APP_PW";
+export const APP_PW_ENV = "MESSAGEOPERATOR_GMAIL_APP_PW";
 
 /**
  * Google displays app passwords in spaced groups (abcd efgh ...) and ignores
@@ -45,7 +45,7 @@ function envAppliesTo(
   // whatever account happens to be alone in the list — that would let an
   // injected instruction mint an authenticated (allowlisted) address.
   const envAddr = (
-    cleanEnvValue(env, "MAILROOM_GMAIL_ADDRESS") ?? ""
+    cleanEnvValue(env, "MESSAGEOPERATOR_GMAIL_ADDRESS") ?? ""
   ).toLowerCase();
   return !!envAddr && envAddr === address.toLowerCase();
 }

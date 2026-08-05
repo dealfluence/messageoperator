@@ -183,7 +183,7 @@ export class Index {
 
   /**
    * FTS statements, or null when the store has no FTS index (runtime
-   * without the fts5 module, or MAILROOM_DISABLE_FTS5). Search then scans
+   * without the fts5 module, or MESSAGEOPERATOR_DISABLE_FTS5). Search then scans
    * with LIKE; all data lives in the message table either way.
    */
   private prepareFts(): FtsStatements | null {
@@ -336,7 +336,7 @@ export class Index {
    * what changed (null when it already agreed, or there is no such row).
    *
    * Sync skips messages it has already indexed, so a message archived or
-   * un-archived OUTSIDE Mailroom — in Gmail's web UI, by a filter, on a phone —
+   * un-archived OUTSIDE Message Operator — in Gmail's web UI, by a filter, on a phone —
    * kept whatever folder it had when first seen, forever. The provider is the
    * authority on folder state, so this re-homes the row toward it. The .eml on
    * disk is moved separately by the broker (see reconcileLocalFolders), which

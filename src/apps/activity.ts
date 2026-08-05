@@ -1,6 +1,6 @@
 /**
- * The activity app: one shared ui:// resource that mailroom_bash and
- * mailroom_view render as an outcomes & alerts card. Claude Desktop mounts
+ * The activity app: one shared ui:// resource that messageoperator_bash and
+ * messageoperator_view render as an outcomes & alerts card. Claude Desktop mounts
  * app iframes only after the tool call completes (verified empirically:
  * toolinput/toolresult are replayed within ~50ms of mount), so everything
  * the card shows — outcomes, alerts, step timings — travels in the tool
@@ -42,13 +42,13 @@ function buildHash(): string {
  * reinstalls, so every build must claim a fresh URI.
  */
 export function activityUri(): string {
-  return `ui://mailroom/activity-${buildHash()}.html`;
+  return `ui://messageoperator/activity-${buildHash()}.html`;
 }
 
 export function registerActivityAppParts(mcp: McpServer): void {
   const uri = activityUri();
 
-  registerAppResource(mcp, "Mailroom activity", uri, {}, async () => ({
+  registerAppResource(mcp, "Message Operator activity", uri, {}, async () => ({
     contents: [
       {
         uri,

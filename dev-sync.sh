@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# dev-sync.sh — build mailroom and push the fresh code into the installed
-# Claude Desktop extension IN PLACE, so terminal edits become testable in
-# Desktop without a full repack/reinstall (settings + userConfig untouched).
+# dev-sync.sh — build Message Operator and push the fresh code into the
+# installed Claude Desktop extension IN PLACE, so terminal edits become
+# testable in Desktop without a full repack/reinstall (settings + userConfig
+# untouched).
 #
 #   ./dev-sync.sh            build + sync dist/ AND node_modules/
 #   ./dev-sync.sh --fast     skip node_modules sync (only when you KNOW deps
 #                            are unchanged — a dep skew crashes the server on
 #                            boot with ERR_MODULE_NOT_FOUND, so default is safe)
 #
-# It never touches MAILROOM_HOME (your real mailboxes/accounts/store.db).
+# It never touches MESSAGEOPERATOR_HOME (your real mailboxes/accounts/store.db).
 # After it runs, FULLY quit Claude Desktop (Cmd-Q) and reopen — MCP servers
 # only restart on app relaunch.
 set -euo pipefail
@@ -17,13 +18,31 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXT="$HOME/Library/Application Support/Claude/Claude Extensions/local.mcpb.team-adeu.mailroom"
+EXT_ROOT="$HOME/Library/Application Support/Claude/Claude Extensions"
+EXT="$EXT_ROOT/local.mcpb.team-adeu.messageoperator"
+# pre-rename (≤0.6.0 "mailroom") extension id — detect so a stale install
+# does not silently keep running old code next to the renamed one
+OLD_EXT="$EXT_ROOT/local.mcpb.team-adeu.mailroom"
 
 if [[ ! -d "$EXT" ]]; then
   echo "✗ installed extension not found at:" >&2
   echo "    $EXT" >&2
-  echo "  Install mailroom.mcpb in Claude Desktop once, then re-run." >&2
+  if [[ -d "$OLD_EXT" ]]; then
+    echo "  A pre-rename 'mailroom' extension is still installed at:" >&2
+    echo "    $OLD_EXT" >&2
+    echo "  Install messageoperator.mcpb in Claude Desktop, remove the old" >&2
+    echo "  'Mailroom' extension there, then re-run." >&2
+  else
+    echo "  Install messageoperator.mcpb in Claude Desktop once, then re-run." >&2
+  fi
   exit 1
+fi
+
+if [[ -d "$OLD_EXT" ]]; then
+  echo "⚠ pre-rename 'mailroom' extension is ALSO still installed:" >&2
+  echo "    $OLD_EXT" >&2
+  echo "  Remove it in Claude Desktop's extension settings — two installed" >&2
+  echo "  servers would race over the same state directory." >&2
 fi
 
 cd "$REPO"
@@ -47,14 +66,23 @@ else
   cp -f "$REPO/bundle/package.json" "$EXT/package.json"
 fi
 
-# The broker copies room_assets/mail.py into MAILROOM_HOME/room/bin/mail.py at
+# The broker copies room_assets/mail.py into <state home>/room/bin/mail.py at
 # server boot (layout.ts ensureRoom), and THAT copy is what actually runs when
 # you invoke `mail` in a chat. Refreshing dist/ alone is not enough: without a
 # full Desktop restart the running broker keeps the old room copy. So push the
 # fresh mail.py straight into the live room too — the broker overwrites it with
 # an identical file on next boot, so this is always safe.
-MR_HOME="${MAILROOM_HOME:-$HOME/mailroom}"
-ROOM_MAIL="$MR_HOME/room/bin/mail.py"
+# State home: canonical env, then legacy env, then the same directory probe
+# layout.ts stateHome() uses.
+MO_HOME="${MESSAGEOPERATOR_HOME:-${MAILROOM_HOME:-}}"
+if [[ -z "$MO_HOME" ]]; then
+  if [[ ! -d "$HOME/messageoperator" && -d "$HOME/mailroom" ]]; then
+    MO_HOME="$HOME/mailroom"
+  else
+    MO_HOME="$HOME/messageoperator"
+  fi
+fi
+ROOM_MAIL="$MO_HOME/room/bin/mail.py"
 if [[ -f "$ROOM_MAIL" ]]; then
   cp -f "$REPO/bundle/dist/room_assets/mail.py" "$ROOM_MAIL"
   echo "→ refreshed live room copy: $ROOM_MAIL"
@@ -74,7 +102,7 @@ fi
 
 if pgrep -x "Claude" >/dev/null 2>&1; then
   echo "⚠ Claude Desktop is RUNNING — fully quit it (Cmd-Q, not just the window)"
-  echo "  and reopen so the mailroom server reboots with the new code."
+  echo "  and reopen so the messageoperator server reboots with the new code."
 else
   echo "✓ Claude Desktop is not running — it will boot the new code on next launch."
 fi

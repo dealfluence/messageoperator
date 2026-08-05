@@ -18,9 +18,9 @@
  * then written through a Windows TEXT-mode handle, which rewrites every \n as
  * \r\n and so doubles the CR. The room preserved those bytes faithfully
  * end-to-end (sha256 verified identical on both send paths), so the malformed
- * input predates Mailroom — it came in with the fixture.
+ * input predates Message Operator — it came in with the fixture.
  *
- * And on those bytes Mailroom is not even wrong: Python's csv module, run on
+ * And on those bytes Message Operator is not even wrong: Python's csv module, run on
  * the identical file, yields the same 16 grid rows (8 real + 8 blank) = 15
  * data rows. So NEW-7 is NOT a parser defect.
  *

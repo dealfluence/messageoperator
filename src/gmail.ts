@@ -160,7 +160,7 @@ const defaultClientFactory: GmailClientFactory = async (address, password) => {
 };
 
 /**
- * One IMAP LOGIN round trip, used by `mailroom set-gmail-password` to test
+ * One IMAP LOGIN round trip, used by `messageoperator set-gmail-password` to test
  * the credential at storage time. Throws GmailAuthError when the server
  * refuses the login; connection problems propagate as-is.
  */
@@ -398,7 +398,7 @@ function indexMetaMessage(
   const rfcId = env.messageId ? String(env.messageId) : undefined;
   // Already indexed: not a new row, but its labels are FRESH from the provider,
   // so this is the one chance to notice the message was archived or moved back
-  // to the inbox outside Mailroom (web UI, a filter, a phone). Without this the
+  // to the inbox outside Message Operator (web UI, a filter, a phone). Without this the
   // row keeps whatever folder it had when first seen, forever.
   if (index.hasSha(key) || index.hasProviderMsg(address, providerId)) {
     index.reconcileFolder(address, providerId, metaFolderFor(tags), tags);
@@ -915,7 +915,7 @@ export async function sendMime(
     throw new Rejection(
       "delivery_unavailable",
       `gmail app password for ${acct.address} is not available (set it in the ` +
-        "extension settings or run `mailroom set-gmail-password`)",
+        "extension settings or run `messageoperator set-gmail-password`)",
     );
   }
   if (!/^[\x00-\x7f]*$/.test(password)) {

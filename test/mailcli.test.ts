@@ -450,7 +450,7 @@ describe("mail CLI (python/sqlite)", () => {
 
   it("search still answers when the store has no FTS index", () => {
     const layout = makeLayout();
-    process.env.MAILROOM_DISABLE_FTS5 = "1";
+    process.env.MESSAGEOPERATOR_DISABLE_FTS5 = "1";
     try {
       // broker built the store without FTS (limited-runtime scenario)
       seedMessage(layout, "invoice open", "please send money", 100);
@@ -458,7 +458,7 @@ describe("mail CLI (python/sqlite)", () => {
       seedMessage(layout, "apple pie", "tasty dessert", 200);
       seedMessage(layout, "banana split", "sweet dessert", 300);
     } finally {
-      delete process.env.MAILROOM_DISABLE_FTS5;
+      delete process.env.MESSAGEOPERATOR_DISABLE_FTS5;
     }
     const out = mail(layout, ["search", "invoi -paid"]).stdout;
     expect(out).toContain("invoice open");

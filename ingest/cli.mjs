@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Mailroom ingest CLI (read-only against providers).
+ * Message Operator ingest CLI (read-only against providers).
  *
  *   node ingest/cli.mjs backfill [address]     backfill All Mail (+sent bodies)
  *   node ingest/cli.mjs coverage               honest per-account coverage
@@ -9,8 +9,8 @@
  *                            [--archived] [--tag T] [--subject S] [--limit N]
  *   node ingest/cli.mjs get <id>               message metadata + tags + body?
  *
- * Store: MAILROOM_INGEST_HOME (default ~/mailroom-ingest).
- * Creds/accounts: reused from MAILROOM_HOME's broker config + credentials.
+ * Store: MESSAGEOPERATOR_INGEST_HOME (default ~/messageoperator-ingest).
+ * Creds/accounts: reused from MESSAGEOPERATOR_HOME's broker config + credentials.
  */
 import fs from "node:fs";
 import path from "node:path";

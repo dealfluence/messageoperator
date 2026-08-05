@@ -3,7 +3,7 @@
  *
  * The tool handler calls begin()/end() around a bash/view call; the broker
  * (and the handler itself) report coarse phases via step(). The app polls
- * the app-only mailroom_activity_progress tool, which returns snapshot().
+ * the app-only messageoperator_activity_progress tool, which returns snapshot().
  * Everything lives in memory: no files, no audit side effects, and reads
  * never contend with the broker's cycle lock. step() is a no-op while no
  * call is active, so daemon-mode broker cycles cost nothing.

@@ -83,9 +83,9 @@ describe("config", () => {
       }),
     );
     const cfg = loadConfig(p, {
-      MAILROOM_GMAIL_ADDRESS: "a@gmail.com",
-      MAILROOM_MS_ADDRESS: "m@outlook.com",
-      MAILROOM_MS_CLIENT_ID: "cid-env",
+      MESSAGEOPERATOR_GMAIL_ADDRESS: "a@gmail.com",
+      MESSAGEOPERATOR_MS_ADDRESS: "m@outlook.com",
+      MESSAGEOPERATOR_MS_CLIENT_ID: "cid-env",
     });
     expect(cfg.accounts).toHaveLength(2);
     expect(findAccount(cfg, "m@outlook.com")?.client_id).toBe("cid-env");
@@ -99,15 +99,19 @@ describe("config", () => {
         accounts: [{ provider: "microsoft", address: "m@outlook.com" }],
       }),
     );
-    const cfg = loadConfig(p, { MAILROOM_MS_CLIENT_ID: "shared-cid" });
+    const cfg = loadConfig(p, { MESSAGEOPERATOR_MS_CLIENT_ID: "shared-cid" });
     expect(findAccount(cfg, "m@outlook.com")?.client_id).toBe("shared-cid");
   });
 
   it("lets env dry_run override the file (extension settings win)", () => {
     const p = configPath();
     fs.writeFileSync(p, JSON.stringify({ dry_run: true }));
-    expect(loadConfig(p, { MAILROOM_DRY_RUN: "false" }).dry_run).toBe(false);
-    expect(loadConfig(p, { MAILROOM_DRY_RUN: "true" }).dry_run).toBe(true);
+    expect(loadConfig(p, { MESSAGEOPERATOR_DRY_RUN: "false" }).dry_run).toBe(
+      false,
+    );
+    expect(loadConfig(p, { MESSAGEOPERATOR_DRY_RUN: "true" }).dry_run).toBe(
+      true,
+    );
     expect(loadConfig(p, {}).dry_run).toBe(true);
   });
 
@@ -118,7 +122,7 @@ describe("config", () => {
       JSON.stringify({ policy: { allowed_recipient_domains: ["a.com"] } }),
     );
     const cfg = loadConfig(p, {
-      MAILROOM_ALLOWED_RECIPIENT_DOMAINS: "@B.com, a.com",
+      MESSAGEOPERATOR_ALLOWED_RECIPIENT_DOMAINS: "@B.com, a.com",
     });
     expect(cfg.policy.allowed_recipient_domains.sort()).toEqual([
       "a.com",
@@ -159,9 +163,9 @@ describe("config", () => {
 
     const cfg = loadConfig(p, {});
     expect(defaultMsClientId(cfg, {})).toBe("cid-1"); // unique existing id
-    expect(defaultMsClientId(cfg, { MAILROOM_MS_CLIENT_ID: "cid-env" })).toBe(
-      "cid-env",
-    );
+    expect(
+      defaultMsClientId(cfg, { MESSAGEOPERATOR_MS_CLIENT_ID: "cid-env" }),
+    ).toBe("cid-env");
   });
 
   it("survives a missing or corrupt file", () => {

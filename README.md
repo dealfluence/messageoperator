@@ -1,6 +1,7 @@
 # Message Operator : email as a small computer
 
-The TypeScript mailroom, targeting **macOS + Claude Desktop** and packaged
+The TypeScript Message Operator server (formerly "Mailroom"), targeting
+**macOS + Claude Desktop** and packaged
 as an **MCPB bundle** (`.mcpb`, one-click install). The architecture is a
 filesystem contract, not a language artifact: the room/broker split, path
 jail, Maildir layout, boundary pull/push at tool-call edges, sha-validated
@@ -10,8 +11,8 @@ original POC.
 ## Development (any platform)
 
 ```
-git clone https://github.com/dealfluence/Message-Operator.git
-cd Message-Operator
+git clone https://github.com/dealfluence/messageoperator.git
+cd messageoperator
 npm install
 ```
 
@@ -33,12 +34,13 @@ FTS5 optional); the in-room CLI needs only a system Python 3 and **uv** installe
 
 ```
 npm run build                          # dist/ + bundle/ (prod node_modules)
-npx mcpb pack bundle mailroom.mcpb     # or: npm run pack:mcpb
+npx mcpb pack bundle messageoperator.mcpb     # or: npm run pack:mcpb
 ```
 
 Open the `.mcpb` with Claude Desktop on macOS to install. The extension
 settings hold only policy and the Azure client ID; mailboxes are connected
-in-chat with `mail login <address>`. State lives under `~/mailroom/`.
+in-chat with `mail login <address>`. State lives under `~/messageoperator/`
+(an existing `~/mailroom/` from a pre-rename install keeps being used).
 
 ## Azure app registration (Microsoft accounts)
 
@@ -53,7 +55,7 @@ in-chat with `mail login <address>`. State lives under `~/mailroom/`.
 
 ## Config beyond the settings pane
 
-`~/mailroom/broker/config.json`:
+`~/messageoperator/broker/config.json`:
 
 ```json
 {

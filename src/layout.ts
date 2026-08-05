@@ -3,7 +3,7 @@
  *
  * The two sides share no memory; this module defines the directory contract
  * between them and the path jail used by the MCP tools. Port of the Python
- * POC's layout.py — the state tree under ~/mailroom is byte-compatible.
+ * POC's layout.py — the state tree under the state home is byte-compatible.
  */
 
 import { createHash } from "node:crypto";
@@ -24,14 +24,14 @@ export const MAILDIR_SUBDIRS = ["cur", "new", "tmp"] as const;
 
 export class JailError extends Error {}
 
-export function mailroomHome(): string {
+export function stateHome(): string {
   // Claude Desktop feeds this from MCPB user_config; guard against the ways
   // that can go wrong: unset, empty, an unresolved "${...}" template passed
   // through literally, or a shell-style "~" the picker never expanded. A
   // relative path would otherwise resolve against the app's cwd (often "/",
   // read-only) and kill the server at first mkdir.
-  const raw = (process.env.MAILROOM_HOME || "").trim();
-  const fallback = path.join(os.homedir(), "mailroom");
+  const raw = (process.env.MESSAGEOPERATOR_HOME || "").trim();
+  const fallback = defaultStateHome();
   if (!raw || raw.includes("${")) return fallback;
   let expanded = raw;
   if (expanded === "~") expanded = os.homedir();
@@ -39,6 +39,17 @@ export function mailroomHome(): string {
     expanded = path.join(os.homedir(), expanded.slice(2));
   if (!path.isAbsolute(expanded)) return fallback;
   return expanded;
+}
+
+/**
+ * ~/messageoperator, unless only a legacy ~/mailroom (state written by a
+ * pre-rename install) exists — that data keeps being used untouched.
+ */
+export function defaultStateHome(): string {
+  const modern = path.join(os.homedir(), "messageoperator");
+  const legacy = path.join(os.homedir(), "mailroom");
+  if (!fs.existsSync(modern) && fs.existsSync(legacy)) return legacy;
+  return modern;
 }
 
 export function sha12(data: Buffer | string): string {
@@ -79,7 +90,7 @@ export function resolveFollowingSymlinks(p: string): string {
  * or common installation locations on Windows and macOS.
  */
 export function findSystemPython(): string | null {
-  const envOverride = process.env.MAILROOM_PYTHON;
+  const envOverride = process.env.MESSAGEOPERATOR_PYTHON;
   if (envOverride && fs.existsSync(envOverride)) {
     return fs.realpathSync(envOverride);
   }
@@ -165,7 +176,7 @@ export class Layout {
   snapshots: string;
 
   constructor(home?: string) {
-    this.home = path.resolve(home || mailroomHome());
+    this.home = path.resolve(home || stateHome());
     this.room = path.join(this.home, "room");
     this.accounts = path.join(this.room, "accounts");
     this.attachments = path.join(this.room, "attachments");
@@ -292,8 +303,8 @@ export class Layout {
     const shim = python
       ? `#!/bin/sh\nexec "${python.replace(/\\/g, "/")}" "$(dirname "$0")/mail.py" "$@"\n`
       : `#!/bin/sh\necho "mail: no system Python 3 found on this machine." >&2\n` +
-        `echo "Install Python 3 or set MAILROOM_PYTHON=/path/to/python," >&2\n` +
-        `echo "then restart the Mailroom extension." >&2\nexit 1\n`;
+        `echo "Install Python 3 or set MESSAGEOPERATOR_PYTHON=/path/to/python," >&2\n` +
+        `echo "then restart the Message Operator extension." >&2\nexit 1\n`;
     fs.writeFileSync(dest, shim);
     makeExecutable(dest);
 
@@ -302,8 +313,8 @@ export class Layout {
       const cmdShim = python
         ? `@echo off\n"${python}" "%~dp0mail.py" %*\n`
         : `@echo off\necho mail: no system Python 3 found on this machine. >&2\n` +
-          `echo Install Python 3 or set MAILROOM_PYTHON=/path/to/python, >&2\n` +
-          `echo then restart the Mailroom extension. >&2\nexit 1\n`;
+          `echo Install Python 3 or set MESSAGEOPERATOR_PYTHON=/path/to/python, >&2\n` +
+          `echo then restart the Message Operator extension. >&2\nexit 1\n`;
       fs.writeFileSync(cmdDest, cmdShim);
     }
   }

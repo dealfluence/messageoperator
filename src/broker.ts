@@ -4,7 +4,7 @@
  * Owns all credentials, the ledger, and the index. Shares nothing with the
  * MCP server except the filesystem.
  *
- * Boundary mode (`mailroom serve`): no background service. pull() runs at
+ * Boundary mode (`messageoperator serve`): no background service. pull() runs at
  * the start of a reading tool call (network sync, throttled) and push() at
  * the end of a mutating call (execute intents, fold tags, audit). The room
  * state only changes at tool-call edges.
@@ -1441,7 +1441,7 @@ export class Broker {
    *
    * Nothing here talks to a provider, so it is safe under dry_run: it is not a
    * change to the mailbox, it is the room catching up with one that already
-   * happened outside Mailroom.
+   * happened outside Message Operator.
    */
   private reconcileLocalFolders(explained: Set<string>): void {
     let corrected = 0;

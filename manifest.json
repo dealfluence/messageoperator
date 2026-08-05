@@ -1,6 +1,6 @@
 {
   "manifest_version": "0.2",
-  "name": "mailroom",
+  "name": "messageoperator",
   "display_name": "Message Operator",
   "version": "0.6.0",
   "description": "Email as a small computer: four VM tools over your real mailboxes, with a credential-holding broker at the tool-call edges.",
@@ -17,10 +17,10 @@
       "command": "node",
       "args": ["${__dirname}/dist/cli.js", "serve"],
       "env": {
-        "MAILROOM_HOME": "${user_config.mailroom_home}",
-        "MAILROOM_DRY_RUN": "${user_config.dry_run}",
-        "MAILROOM_MS_CLIENT_ID": "${user_config.microsoft_client_id}",
-        "MAILROOM_ALLOWED_RECIPIENT_DOMAINS": "${user_config.allowed_recipient_domains}"
+        "MESSAGEOPERATOR_HOME": "${user_config.state_home}",
+        "MESSAGEOPERATOR_DRY_RUN": "${user_config.dry_run}",
+        "MESSAGEOPERATOR_MS_CLIENT_ID": "${user_config.microsoft_client_id}",
+        "MESSAGEOPERATOR_ALLOWED_RECIPIENT_DOMAINS": "${user_config.allowed_recipient_domains}"
       }
     }
   },
@@ -44,11 +44,10 @@
       "description": "Comma-separated domains mail may be sent to (e.g. example.com, partner.org). Empty = only your own account addresses.",
       "required": false
     },
-    "mailroom_home": {
+    "state_home": {
       "type": "directory",
       "title": "State directory",
-      "description": "Where the mail room and broker state live.",
-      "default": "${HOME}/mailroom",
+      "description": "Where the mail room and broker state live. Leave empty for the default: ~/messageoperator, or an existing ~/mailroom from a pre-rename install (picked up automatically).",
       "required": false
     }
   },

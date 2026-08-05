@@ -707,7 +707,7 @@ describe("broker folder-change processing", () => {
     // this asserts the broker then moves the FILE and explains the move.
     const broker = makeArchiveBroker({ dryRun: true });
     await broker.runCycle({ syncNetwork: false });
-    const seeded = seedInbox(broker, "moved outside mailroom", MSG_ID);
+    const seeded = seedInbox(broker, "moved outside messageoperator", MSG_ID);
     await broker.runCycle({ syncNetwork: false });
 
     // stand in for the sync pass: the provider now says Archive
@@ -725,7 +725,7 @@ describe("broker folder-change processing", () => {
       epoch: 1700000001,
       from: "x@example.com",
       to: "a@gmail.com",
-      subject: "moved outside mailroom",
+      subject: "moved outside messageoperator",
       body: "b",
       gmailId: "P-DRIFT",
     });

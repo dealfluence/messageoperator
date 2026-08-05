@@ -31,7 +31,7 @@ export interface ActivityStructured {
   ok: boolean;
   /** What actually ran, for the card's mono line: "$ mail status", "view skills/SKILL.md". */
   detail?: string;
-  /** Shell exit code (mailroom_bash only). */
+  /** Shell exit code (messageoperator_bash only). */
   exitCode?: number;
   outcomes: Chip[];
   alerts: Chip[];

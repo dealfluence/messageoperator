@@ -1,24 +1,27 @@
 /**
- * Entry points: `mailroom serve` (MCP stdio; what the MCPB bundle runs),
- * `mailroom broker` (standalone poll loop), and two host-side credential
+ * Entry points: `messageoperator serve` (MCP stdio; what the MCPB bundle
+ * runs), `messageoperator broker` (standalone poll loop), and two host-side credential
  * helpers for terminal use — everything they do also happens lazily through
  * the extension settings + `mail login`, so they are conveniences, not
  * requirements.
  */
 
-// Only Node built-ins at module scope: the serve path must reach the MCP
-// handshake without waiting on (or being killed by) the provider dependency
-// graph — every project module is imported dynamically per command.
+// Only Node built-ins (plus the import-free env shim) at module scope: the
+// serve path must reach the MCP handshake without waiting on (or being killed
+// by) the provider dependency graph — every project module is imported
+// dynamically per command.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
+import { adoptLegacyEnv } from "./env.js";
+
 function usage(): never {
   // writeSync: an async stderr write would be dropped by the exit below
   fs.writeSync(
     2,
-    "usage: mailroom <serve | broker [--once] [--interval N] | " +
+    "usage: messageoperator <serve | broker [--once] [--interval N] | " +
       "login [--account ADDRESS] | set-gmail-password --account ADDRESS>\n",
   );
   process.exit(1);
@@ -188,27 +191,35 @@ function promptHidden(prompt: string): Promise<string> {
 }
 
 async function main(): Promise<number> {
+  // Adopt pre-rename MAILROOM_* env values before anything reads env.
+  adoptLegacyEnv();
   const [command, ...rest] = process.argv.slice(2);
   if (!command) usage();
 
   // Crash visibility: the MCP host only shows "server transport closed
   // unexpectedly" when the process dies, and (observed on Claude Desktop
   // macOS) this server's stderr never reaches the host log — so crashes are
-  // also appended to broker/serve-crash.log under MAILROOM_HOME, where they
+  // also appended to broker/serve-crash.log under MESSAGEOPERATOR_HOME, where they
   // can actually be found. writeSync/appendFileSync: async writes would be
   // dropped by the exit.
   const reportCrash = (label: string, detail: unknown): void => {
     const stack = detail instanceof Error ? detail.stack : undefined;
-    const line = `${new Date().toISOString()} mailroom ${label}: ${stack || detail}\n`;
+    const line = `${new Date().toISOString()} messageoperator ${label}: ${stack || detail}\n`;
     try {
       fs.writeSync(2, line);
     } catch {
       /* stderr gone */
     }
     try {
+      // same default + legacy-dir probe as layout.ts stateHome(), inlined to
+      // keep the crash path free of project imports
       const home =
-        (process.env.MAILROOM_HOME || "").trim() ||
-        path.join(os.homedir(), "mailroom");
+        (process.env.MESSAGEOPERATOR_HOME || "").trim() ||
+        [
+          path.join(os.homedir(), "messageoperator"),
+          path.join(os.homedir(), "mailroom"),
+        ].find((p) => fs.existsSync(p)) ||
+        path.join(os.homedir(), "messageoperator");
       fs.appendFileSync(path.join(home, "broker", "serve-crash.log"), line);
     } catch {
       /* broker dir may not exist yet */
@@ -275,7 +286,7 @@ main().then(
     // exiting right after an async write drops the one message that would
     // have explained the crash in Claude Desktop's log
     try {
-      fs.writeSync(2, `mailroom FATAL: ${err?.stack || err}\n`);
+      fs.writeSync(2, `messageoperator FATAL: ${err?.stack || err}\n`);
     } catch {
       /* nowhere to report */
     }

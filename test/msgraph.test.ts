@@ -234,7 +234,7 @@ describe("graph delta sync", () => {
     expect(index.allMessages()).toEqual([]);
   });
 
-  it("re-homes a message archived outside Mailroom to Archive", async () => {
+  it("re-homes a message archived outside Message Operator to Archive", async () => {
     // Field case: the user archives an inbox message in Outlook. The INBOX
     // delta reports it as @removed — the only place Graph says it left the
     // inbox — and the room used to keep showing it in the inbox forever,

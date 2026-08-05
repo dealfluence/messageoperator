@@ -2,9 +2,9 @@
  * The room: an MCP stdio server exposing four VM tools jailed to room/.
  *
  * There is no background broker service and no login tool. The broker acts
- * at tool-call boundaries: reading tools (mailroom_bash, mailroom_view) pull the outside
- * world in before they run, and mutating tools (mailroom_bash, mailroom_create_file,
- * mailroom_str_replace) push queued work out when they finish. Lazy setup rides the
+ * at tool-call boundaries: reading tools (messageoperator_bash, messageoperator_view) pull the outside
+ * world in before they run, and mutating tools (messageoperator_bash, messageoperator_create_file,
+ * messageoperator_str_replace) push queued work out when they finish. Lazy setup rides the
  * same edges — the first pull bootstraps the room from the extension
  * settings and starts any needed sign-in flow in the background.
  */
@@ -43,14 +43,14 @@ const OUTPUT_LIMIT = 40_000; // chars per stream for bash_tool
 // sandbox file. Configurable for deployments that know their client tolerates
 // more.
 const RESULT_BUDGET = (() => {
-  const raw = Number(process.env.MAILROOM_RESULT_BUDGET);
+  const raw = Number(process.env.MESSAGEOPERATOR_RESULT_BUDGET);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 150_000;
 })();
 const BASH_TIMEOUT = 60; // seconds
 const PIPE_GRACE = 5; // seconds to wait for output pipes after the shell exits
 const DRAIN_CAP = 1_000_000; // bytes buffered per stream before we stop keeping data
 
-// Env var names / patterns stripped from mailroom_bash children so casual shell
+// Env var names / patterns stripped from messageoperator_bash children so casual shell
 // work in the room does not see proxies or ambient credentials.
 const STRIP_EXACT = new Set([
   "http_proxy",
@@ -76,7 +76,8 @@ const STRIP_PREFIXES = [
   "gcloud_",
   "openai_",
   "anthropic_",
-  "mailroom_",
+  "messageoperator_",
+  "mailroom_", // pre-rename prefix; adoptLegacyEnv leaves the originals in place
 ];
 
 function whichSync(name: string): string | null {
@@ -98,11 +99,11 @@ function whichSync(name: string): string | null {
 }
 
 /**
- * Locate a POSIX shell for mailroom_bash. macOS (the target) always has
+ * Locate a POSIX shell for messageoperator_bash. macOS (the target) always has
  * /bin/bash; the Windows branches keep the dev machine workable.
  */
 export function findShell(): { label: string; argv: string[] } {
-  const override = process.env.MAILROOM_BASH;
+  const override = process.env.MESSAGEOPERATOR_BASH;
   if (override && fs.existsSync(override)) {
     return { label: `bash (${override})`, argv: [override, "-c"] };
   }
@@ -124,7 +125,7 @@ export function findShell(): { label: string; argv: string[] } {
       return { label: `bash (${found})`, argv: [found, "-c"] };
     }
     throw new Error(
-      "no usable shell for mailroom_bash: install Git for Windows (git-bash) or set MAILROOM_BASH",
+      "no usable shell for messageoperator_bash: install Git for Windows (git-bash) or set MESSAGEOPERATOR_BASH",
     );
   }
   const found = whichSync("bash") || "/bin/sh";
@@ -357,11 +358,11 @@ const VIEW_LIMIT = Math.min(120_000, MIRROR_BUDGET - 2_000);
 // Continuation hints per tool: what Claude should do to get the rest. All are
 // stateless — the caller names the next slice; the server holds no cursor.
 const RECOVERY_HINTS: Record<string, string> = {
-  mailroom_view:
-    "re-run mailroom_view with a view_range past this point (e.g. view_range: [<last line shown + 1>, -1])",
-  mailroom_bash:
+  messageoperator_view:
+    "re-run messageoperator_view with a view_range past this point (e.g. view_range: [<last line shown + 1>, -1])",
+  messageoperator_bash:
     "re-run with narrower scope: a smaller --limit, `mail read <id> --part N` for a long message, " +
-    "a head/grep filter, or mailroom_view with a view_range on the underlying file",
+    "a head/grep filter, or messageoperator_view with a view_range on the underlying file",
 };
 
 /**
@@ -478,7 +479,7 @@ export function clampBashPayload(
 
   const footer =
     `\n[TRUNCATED: output exceeded the result budget and is NOT complete. ` +
-    `To see more, ${RECOVERY_HINTS.mailroom_bash}.]`;
+    `To see more, ${RECOVERY_HINTS.messageoperator_bash}.]`;
   const cut = (text: string, keep: number): string =>
     Buffer.from(text, "utf-8")
       .subarray(0, Math.max(0, keep))
@@ -535,20 +536,20 @@ export function buildServer(
   const lo = layout ?? new Layout();
   lo.ensureRoom();
   const { label, argv: shellArgv } = findShell();
-  log.info(`mailroom_bash shell: ${label}`);
+  log.info(`messageoperator_bash shell: ${label}`);
   log.info(`room: ${lo.room}`);
 
   const mcp = new McpServer(
-    { name: "mailroom", version: "0.5.0" },
+    { name: "messageoperator", version: "0.6.0" },
     {
       instructions:
-        "Mailroom is the user's EMAIL environment: their real mailboxes " +
+        "Message Operator is the user's EMAIL environment: their real mailboxes " +
         "(Gmail, Outlook/Microsoft 365, Google Workspace) live here as a " +
         "filesystem of .eml files, worked with the four VM tools and the " +
         "in-room `mail` CLI. Use it for anything email: reading, searching, " +
         "triaging, drafting, sending — and CONNECTING NEW MAILBOXES. When " +
         "the user wants to add or reconnect an email account, run " +
-        "`mail login <address>` via mailroom_bash: a guided setup page opens in " +
+        "`mail login <address>` via messageoperator_bash: a guided setup page opens in " +
         "their browser (never ask for passwords or credentials in chat). " +
         "Running `mail login` never signs in by itself and handles no " +
         "credentials — it only opens the page where the USER authenticates " +
@@ -556,7 +557,7 @@ export function buildServer(
         "it as authenticating on the user's behalf. " +
         "When the user wants to CHANGE SETTINGS — turn dry run on/off, edit " +
         "the allowed-recipient list, or disconnect/remove a mailbox — run " +
-        "`mail settings` via mailroom_bash: it opens the settings page in " +
+        "`mail settings` via messageoperator_bash: it opens the settings page in " +
         "their browser (only the user can change anything there). Never use " +
         "browser or Chrome tools and never edit config files for this; " +
         "`mail settings` is the only route. " +
@@ -584,7 +585,7 @@ export function buildServer(
 
   registerAppTool(
     mcp,
-    "mailroom_bash",
+    "messageoperator_bash",
     {
       description:
         "THE EMAIL TOOL: read, search, draft, send, and archive the user's " +
@@ -618,7 +619,7 @@ export function buildServer(
     },
     async ({ command }) => {
       const startedAt = Date.now();
-      const seq = progress.begin("mailroom_bash");
+      const seq = progress.begin("messageoperator_bash");
       try {
         progress.step("pulling new mail");
         await pull(); // fresh inbound state before the command looks around
@@ -664,11 +665,11 @@ export function buildServer(
         const payload = clampBashPayload(result);
         return okApp(
           JSON.stringify(payload, null, 2),
-          "mailroom_bash",
+          "messageoperator_bash",
           rendersApps()
             ? buildActivityStructured({
                 seq,
-                tool: "mailroom_bash",
+                tool: "messageoperator_bash",
                 startedAt,
                 ok: true,
                 detail: `$ ${command}`,
@@ -690,7 +691,7 @@ export function buildServer(
   );
 
   mcp.registerTool(
-    "mailroom_create_file",
+    "messageoperator_create_file",
     {
       description:
         "Create a new file in the room. Fails if the file already exists.",
@@ -709,7 +710,7 @@ export function buildServer(
         const target = lo.jail(p);
         if (fs.existsSync(target)) {
           throw new Error(
-            `cannot create ${JSON.stringify(p)}: file already exists (use mailroom_str_replace to edit)`,
+            `cannot create ${JSON.stringify(p)}: file already exists (use messageoperator_str_replace to edit)`,
           );
         }
         fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -723,7 +724,7 @@ export function buildServer(
   );
 
   mcp.registerTool(
-    "mailroom_str_replace",
+    "messageoperator_str_replace",
     {
       description:
         "Replace a unique string in a file inside the room. Fails if old_str " +
@@ -749,7 +750,7 @@ export function buildServer(
           content = new TextDecoder("utf-8", { fatal: true }).decode(raw);
         } catch {
           throw new Error(
-            `${JSON.stringify(p)} is not valid UTF-8 text; mailroom_str_replace only edits text files`,
+            `${JSON.stringify(p)} is not valid UTF-8 text; messageoperator_str_replace only edits text files`,
           );
         }
         const count = content.split(old_str).length - 1;
@@ -778,11 +779,11 @@ export function buildServer(
 
   registerAppTool(
     mcp,
-    "mailroom_view",
+    "messageoperator_view",
     {
       description:
         "View a file (numbered lines) or a directory (tree, 2 levels deep) " +
-        'inside the room. Start with `mailroom_view` on "." to orient yourself.',
+        'inside the room. Start with `messageoperator_view` on "." to orient yourself.',
       inputSchema: {
         description: z.string().describe("One line describing why."),
         path: z
@@ -799,13 +800,13 @@ export function buildServer(
     },
     async ({ path: p, view_range }) => {
       const startedAt = Date.now();
-      const seq = progress.begin("mailroom_view");
+      const seq = progress.begin("messageoperator_view");
       const structured = (): ActivityStructured | null => {
         progress.end(); // close the last step so its timing ships below
         if (!rendersApps()) return null;
         return buildActivityStructured({
           seq,
-          tool: "mailroom_view",
+          tool: "messageoperator_view",
           startedAt,
           ok: true,
           detail:
@@ -822,7 +823,11 @@ export function buildServer(
         progress.step("reading");
         const target = lo.jail(p);
         if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
-          return okApp(renderTree(target), "mailroom_view", structured());
+          return okApp(
+            renderTree(target),
+            "messageoperator_view",
+            structured(),
+          );
         }
         if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
           throw new Error(`no such file or directory: ${JSON.stringify(p)}`);
@@ -869,7 +874,7 @@ export function buildServer(
             `\n[truncated at line ${lastLineNo} of ${totalLineNo}; ` +
             `continue with view_range: [${lastLineNo + 1}, -1]]`;
         }
-        return okApp(body, "mailroom_view", structured());
+        return okApp(body, "messageoperator_view", structured());
       } catch (err) {
         return fail(err);
       } finally {
@@ -881,7 +886,7 @@ export function buildServer(
   // App-only tool for the activity UI to poll live execution progress
   registerAppTool(
     mcp,
-    "mailroom_activity_progress",
+    "messageoperator_activity_progress",
     {
       description: "Internal tool for UI progress polling.",
       inputSchema: {},
@@ -901,7 +906,7 @@ export function buildServer(
   // Hidden tool for the UI to securely open local files
   registerAppTool(
     mcp,
-    "mailroom_open_file",
+    "messageoperator_open_file",
     {
       description: "Internal tool for UI to open local attachments.",
       inputSchema: { path: z.string() },
@@ -928,7 +933,7 @@ export function buildServer(
 }
 
 function boundaryBrokerEnabled(layout: Layout): boolean {
-  const override = process.env.MAILROOM_SERVE_BROKER;
+  const override = process.env.MESSAGEOPERATOR_SERVE_BROKER;
   if (override !== undefined) {
     return !["off", "0", "false", "no", "none"].includes(
       override.trim().toLowerCase(),
@@ -953,7 +958,7 @@ export async function serve(): Promise<void> {
   log.info(
     `boot: build ${buildStamp()}; node ${process.version} ${process.platform} ` +
       `cwd=${process.cwd()} ` +
-      `MAILROOM_HOME=${JSON.stringify(process.env.MAILROOM_HOME ?? "(unset)")}`,
+      `MESSAGEOPERATOR_HOME=${JSON.stringify(process.env.MESSAGEOPERATOR_HOME ?? "(unset)")}`,
   );
   const layout = new Layout();
   log.info(`state home: ${layout.home}`);
@@ -977,7 +982,7 @@ export async function serve(): Promise<void> {
     );
   };
   await server.connect(new StdioServerTransport());
-  log.info("mailroom MCP server ready (stdio)");
+  log.info("messageoperator MCP server ready (stdio)");
 
   if (boundaryBrokerEnabled(layout)) {
     try {
@@ -993,7 +998,7 @@ export async function serve(): Promise<void> {
       );
     }
   } else {
-    log.info("serve_broker is off; run `mailroom broker` separately");
+    log.info("serve_broker is off; run `messageoperator broker` separately");
   }
 
   // Hold serve() open until the session actually ends. Three traps to avoid:

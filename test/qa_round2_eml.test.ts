@@ -29,10 +29,10 @@
  *
  * ── BUG-1 residual: "emit RFC 2231 filename*= on the Graph path" — NOT ACTIONABLE
  *
- * Mailroom already does, on BOTH paths: finalMime() is provider-independent and
+ * Message Operator already does, on BOTH paths: finalMime() is provider-independent and
  * encodes every attachment parameter through mimeParam(), which emits
  * `filename*=utf-8''…` for any non-ASCII name. Confirmed on disk — the Sent
- * copy Mailroom itself wrote carries:
+ * copy Message Operator itself wrote carries:
  *
  *   filename*=utf-8''QA2%20sopimus%20%C3%84%C3%96%20%E2%98%83.docx
  *

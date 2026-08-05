@@ -105,10 +105,10 @@ describe("history backfill budget", () => {
 
 describe("boundary broker", () => {
   const keysToScrub = [
-    "MAILROOM_GMAIL_APP_PW",
-    "MAILROOM_GMAIL_ADDRESS",
-    "MAILROOM_MS_ADDRESS",
-    "MAILROOM_MS_CLIENT_ID",
+    "MESSAGEOPERATOR_GMAIL_APP_PW",
+    "MESSAGEOPERATOR_GMAIL_ADDRESS",
+    "MESSAGEOPERATOR_MS_ADDRESS",
+    "MESSAGEOPERATOR_MS_CLIENT_ID",
   ];
   const envBackup: Record<string, string | undefined> = {};
 
@@ -163,12 +163,12 @@ describe("boundary broker", () => {
     expect(outcomes[0]).toContain("client_id");
     broker.close();
   });
-  it("uses the connector-set MAILROOM_MS_CLIENT_ID for a first microsoft login", async () => {
+  it("uses the connector-set MESSAGEOPERATOR_MS_CLIENT_ID for a first microsoft login", async () => {
     // Regression: a fresh install with the client_id only in the extension
     // settings (env), no microsoft account yet configured. The old code read
     // client_id only from the CLI arg or an EXISTING account, so this
     // first-account login registered nothing and opened no browser.
-    process.env.MAILROOM_MS_CLIENT_ID = "env-cid";
+    process.env.MESSAGEOPERATOR_MS_CLIENT_ID = "env-cid";
     const broker = makeBroker();
     // config with NO microsoft account at all, so the only client_id source
     // is the env var
@@ -396,11 +396,11 @@ describe("boundary broker", () => {
     // the settings-pane path: the account exists only as env vars, and used
     // to vanish (with its sync) when the extension was reinstalled with
     // empty settings
-    process.env.MAILROOM_GMAIL_ADDRESS = "settings-pane@gmail.com";
+    process.env.MESSAGEOPERATOR_GMAIL_ADDRESS = "settings-pane@gmail.com";
     const broker = makeBroker();
     await broker.runCycle({ syncNetwork: false });
     broker.close();
-    delete process.env.MAILROOM_GMAIL_ADDRESS; // "reinstall": env gone
+    delete process.env.MESSAGEOPERATOR_GMAIL_ADDRESS; // "reinstall": env gone
     expect(fileAccounts(broker)).toContainEqual({
       provider: "gmail",
       address: "settings-pane@gmail.com",

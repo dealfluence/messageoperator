@@ -26,20 +26,24 @@ describe("settings page precedence (config)", () => {
       dry_run: false,
       allowed_recipient_domains: ["Partner.ORG", "@example.com"],
     });
-    const cfg = loadConfig(p, { MAILROOM_DRY_RUN: "true" });
+    const cfg = loadConfig(p, { MESSAGEOPERATOR_DRY_RUN: "true" });
     expect(cfg.dry_run).toBe(false); // page wins
     expect(cfg.policy.allowed_recipient_domains).toEqual([
       "partner.org",
       "example.com",
     ]);
-    expect(dryRunSource(p, { MAILROOM_DRY_RUN: "true" })).toBe("settings_page");
+    expect(dryRunSource(p, { MESSAGEOPERATOR_DRY_RUN: "true" })).toBe(
+      "settings_page",
+    );
   });
 
   it("without page-owned values the pane env still decides (bootstrap preserved)", () => {
     const p = configPath();
     fs.writeFileSync(p, JSON.stringify({ dry_run: true }));
-    expect(loadConfig(p, { MAILROOM_DRY_RUN: "false" }).dry_run).toBe(false);
-    expect(dryRunSource(p, { MAILROOM_DRY_RUN: "false" })).toBe(
+    expect(loadConfig(p, { MESSAGEOPERATOR_DRY_RUN: "false" }).dry_run).toBe(
+      false,
+    );
+    expect(dryRunSource(p, { MESSAGEOPERATOR_DRY_RUN: "false" })).toBe(
       "extension_settings",
     );
     expect(dryRunSource(p, {})).toBe("config_file");
@@ -450,7 +454,7 @@ describe("broker settings integration", () => {
     });
 
     const cfg = loadConfig(broker.layout.configPath, {
-      MAILROOM_DRY_RUN: "true",
+      MESSAGEOPERATOR_DRY_RUN: "true",
     });
     expect(cfg.dry_run).toBe(false);
     expect(cfg.policy.allowed_recipient_domains).toEqual(["example.com"]);

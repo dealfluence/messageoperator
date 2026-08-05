@@ -1,5 +1,5 @@
 /**
- * Mailroom activity card (shared by mailroom_bash and mailroom_view).
+ * Message Operator activity card (shared by messageoperator_bash and messageoperator_view).
  *
  * Claude Desktop mounts app iframes only after the tool call completes and
  * replays toolinput/toolresult within ~50ms of mount (measured), so this is
@@ -155,7 +155,7 @@ function applyCtx(ctx: Partial<McpUiHostContext> | undefined): void {
 }
 
 async function main(): Promise<void> {
-  const app = new App({ name: "mailroom-activity", version: "1.0.0" });
+  const app = new App({ name: "messageoperator-activity", version: "1.0.0" });
 
   const handleToolInput = (p: unknown) => {
     const args = (p as { arguments?: Record<string, unknown> }).arguments;
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
       (path: string) => {
         app
           .callServerTool({
-            name: "mailroom_open_file",
+            name: "messageoperator_open_file",
             arguments: { path },
           })
           .catch(() => {});
@@ -224,7 +224,7 @@ async function main(): Promise<void> {
     if (resultSeen) return;
     try {
       const res = await app.callServerTool({
-        name: "mailroom_activity_progress",
+        name: "messageoperator_activity_progress",
         arguments: {},
       });
       if (resultSeen) return; // safety check after await
@@ -268,7 +268,7 @@ async function demo(): Promise<void> {
     renderCard(
       {
         view: "activity",
-        tool: "mailroom_bash",
+        tool: "messageoperator_bash",
         ok: true,
         detail: "$ mail search 'invoice' --limit 20",
         exitCode: 0,
@@ -284,7 +284,7 @@ async function demo(): Promise<void> {
   renderCard(
     {
       view: "activity",
-      tool: "mailroom_bash",
+      tool: "messageoperator_bash",
       ok: true,
       detail: "$ mail search 'invoice' --limit 20",
       exitCode: 0,

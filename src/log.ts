@@ -12,7 +12,7 @@
 import fs from "node:fs";
 
 function line(level: string, message: string): void {
-  const text = `${new Date().toISOString()} mailroom ${level} ${message}\n`;
+  const text = `${new Date().toISOString()} messageoperator ${level} ${message}\n`;
   try {
     fs.writeSync(2, text);
   } catch {

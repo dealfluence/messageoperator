@@ -1,20 +1,40 @@
 /**
  * Where the ingest store lives and how it finds accounts + Gmail credentials.
- * It REUSES the existing Mailroom credential storage (broker/credentials +
- * broker/config.json) rather than inventing new secret handling — nothing
- * sensitive is copied, moved, printed, or committed.
+ * It REUSES the existing Message Operator credential storage
+ * (broker/credentials + broker/config.json) rather than inventing new secret
+ * handling — nothing sensitive is copied, moved, printed, or committed.
  *
- *   MAILROOM_HOME         → existing mailroom home (accounts + credentials)
- *   MAILROOM_INGEST_HOME  → ingest store/blobs/logs (default ~/mailroom-ingest)
+ *   MESSAGEOPERATOR_HOME        → existing state home (accounts + credentials)
+ *   MESSAGEOPERATOR_INGEST_HOME → ingest store/blobs/logs
+ *                                 (default ~/messageoperator-ingest)
+ *
+ * Pre-rename MAILROOM_* env names and ~/mailroom* directories are still
+ * honored as fallbacks (v0.6 rename; drop at 1.0).
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+function envVal(suffix) {
+  return (
+    process.env[`MESSAGEOPERATOR_${suffix}`] ??
+    process.env[`MAILROOM_${suffix}`]
+  );
+}
+
+/** Canonical dir, unless only the legacy one exists (pre-rename state). */
+function probeDir(modern, legacy) {
+  if (!fs.existsSync(modern) && fs.existsSync(legacy)) return legacy;
+  return modern;
+}
+
 export function ingestHome() {
   return (
-    process.env.MAILROOM_INGEST_HOME ||
-    path.join(os.homedir(), "mailroom-ingest")
+    envVal("INGEST_HOME") ||
+    probeDir(
+      path.join(os.homedir(), "messageoperator-ingest"),
+      path.join(os.homedir(), "mailroom-ingest"),
+    )
   );
 }
 
@@ -28,13 +48,19 @@ export function storePaths() {
   };
 }
 
-export function mailroomHome() {
-  return process.env.MAILROOM_HOME || path.join(os.homedir(), "mailroom");
+export function stateHome() {
+  return (
+    envVal("HOME") ||
+    probeDir(
+      path.join(os.homedir(), "messageoperator"),
+      path.join(os.homedir(), "mailroom"),
+    )
+  );
 }
 
 /** Accounts from the existing broker config: [{provider, address, client_id?}]. */
 export function loadAccounts() {
-  const cfgPath = path.join(mailroomHome(), "broker", "config.json");
+  const cfgPath = path.join(stateHome(), "broker", "config.json");
   try {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
     return Array.isArray(cfg.accounts) ? cfg.accounts : [];
@@ -45,13 +71,13 @@ export function loadAccounts() {
 
 /** Gmail app password for an address: env (bound) first, then the creds file. */
 export function gmailPassword(address) {
-  const envAddr = (process.env.MAILROOM_GMAIL_ADDRESS || "").toLowerCase();
-  const envPw = process.env.MAILROOM_GMAIL_APP_PW;
+  const envAddr = (envVal("GMAIL_ADDRESS") || "").toLowerCase();
+  const envPw = envVal("GMAIL_APP_PW");
   if (envPw && envAddr && envAddr === address.toLowerCase()) {
     return envPw.replace(/\s+/g, "");
   }
   const file = path.join(
-    mailroomHome(),
+    stateHome(),
     "broker",
     "credentials",
     `gmail_app_pw.${address.toLowerCase()}`,

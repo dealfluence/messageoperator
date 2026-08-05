@@ -15,7 +15,9 @@ AI_SESSION.md
 /progress.md
 /findings.md
 
-# ingest data & secrets must never enter git (data lives under ~/mailroom-ingest)
+# ingest data & secrets must never enter git (data lives under
+# ~/messageoperator-ingest; mailroom-ingest is the pre-rename dir)
+messageoperator-ingest/
 mailroom-ingest/
 *.db
 *.db-wal

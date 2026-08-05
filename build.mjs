@@ -160,4 +160,4 @@ execSync("npm ci --omit=dev --ignore-scripts", {
   cwd: bundle,
   stdio: "inherit",
 });
-console.log("bundle/ ready — run `npx mcpb pack bundle mailroom.mcpb`");
+console.log("bundle/ ready — run `npx mcpb pack bundle messageoperator.mcpb`");

@@ -343,7 +343,7 @@ describe("gmail All-Mail chunked backfill", () => {
   });
 });
 
-describe("gmail folder drift (archived outside Mailroom)", () => {
+describe("gmail folder drift (archived outside Message Operator)", () => {
   it("REGRESSION: an archived message must not stay in the room's inbox", async () => {
     // The user archives a message in Gmail's web UI. Archiving drops the INBOX
     // label but keeps the same All-Mail UID, and the All-Mail scan only fetches

@@ -328,7 +328,7 @@ export class LoginManager {
           } else {
             respond(
               res,
-              "Mailroom is waiting for the Microsoft sign-in redirect.",
+              "Message Operator is waiting for the Microsoft sign-in redirect.",
             );
           }
           return;
@@ -346,7 +346,7 @@ export class LoginManager {
             // its own username and will never match this address
             respond(
               res,
-              `You signed in as ${got}, but mailroom needs ${address}. ` +
+              `You signed in as ${got}, but messageoperator needs ${address}. ` +
                 "Run `mail login` again and pick the right account.",
             );
             finish(`wrong_account: ${got}`);
@@ -354,7 +354,7 @@ export class LoginManager {
           }
           respond(
             res,
-            `Mailroom is signed in as ${address}. You can close this tab.`,
+            `Message Operator is signed in as ${address}. You can close this tab.`,
           );
           finish("ok");
           log.info(`microsoft: sign-in completed for ${address}`);
@@ -408,7 +408,7 @@ export class LoginManager {
 function respond(res: http.ServerResponse, message: string): void {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(
-    `<!doctype html><meta charset="utf-8"><title>mailroom</title>` +
+    `<!doctype html><meta charset="utf-8"><title>messageoperator</title>` +
       `<body style="font-family: system-ui; margin: 4em auto; max-width: 32em">` +
       `<p>${message}</p></body>`,
   );
@@ -566,7 +566,7 @@ function indexHistoryItem(
         ? "Sent"
         : "Archive";
   // Already indexed: not a new row, but parentFolderId is FRESH from Graph, so
-  // this is where a message moved outside Mailroom (Outlook, a rule, a phone)
+  // this is where a message moved outside Message Operator (Outlook, a rule, a phone)
   // gets noticed. Without it the row keeps its original folder forever.
   if (
     index.graphIsSeen(id) ||
@@ -906,7 +906,7 @@ export async function fetchBody(
 
 /**
  * One cheap Graph call proving the token actually grants mailbox access.
- * Used by `mailroom login` so a bad app registration fails at sign-in time.
+ * Used by `messageoperator login` so a bad app registration fails at sign-in time.
  */
 export async function verifyMailbox(
   token: string,

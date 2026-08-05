@@ -32,7 +32,7 @@ disk are only the bodies downloaded so far.
   from, subject, **id**, path (`-` = body not on disk). Footer:
   `TOTAL n / cursor <c>`; page older with `--before <c>`. `--account A`
   filters. TOTAL is the real mailbox-wide count.
-  An account shown as `addr [disconnected]` was REMOVED from Mailroom and its
+  An account shown as `addr [disconnected]` was REMOVED from Message Operator and its
   mail was kept as a local archive: it is NOT live mail, nothing new arrives,
   and send/archive/fetch on it will be rejected. Never present it as the
   user's current mail — say the mailbox is disconnected and offer
@@ -52,7 +52,7 @@ disk are only the bodies downloaded so far.
   positive. Same TSV columns as index.
 - `mail reply <id-or-path> body.txt` — threaded reply draft into Drafts;
   prints the draft path. Write the body to a file first (e.g. with
-  mailroom_create_file). The source body must be on disk — fetch it first.
+  messageoperator_create_file). The source body must be on disk — fetch it first.
 - `mail compose a@b.com to@x.com "Subject" body.txt` — new draft.
 - `mail send <draft-path> [--attach attachments/<sha>/file.pdf]` — queue for
   delivery. Refuses anything not under Drafts/. Attachment paths must live
@@ -74,7 +74,7 @@ disk are only the bodies downloaded so far.
 - `mail unarchive <id-or-path> [...]` — put archived message(s) back in the
   inbox. Also works by id alone.
   Folders follow the PROVIDER: if a message was archived or moved back to the
-  inbox outside Mailroom (web UI, a filter, a phone), the next sync re-homes the
+  inbox outside Message Operator (web UI, a filter, a phone), the next sync re-homes the
   room to match. So a message can change folder between your commands without
   you doing anything — re-read `mail index` rather than trusting an earlier
   listing's folder.
@@ -94,7 +94,7 @@ disk are only the bodies downloaded so far.
   `C:\Users\me\Downloads\scan.jpg`. The room runs on the USER'S computer, so any
   path that computer can see is importable. This is how you attach "that file in
   my Downloads folder" when no sandbox is in play at all. If the user names a
-  file without giving a path, FIND it first with `mailroom_bash` (`ls`, `find`) —
+  file without giving a path, FIND it first with `messageoperator_bash` (`ls`, `find`) —
   the shell is not limited to the room — then import the path you found. Do not
   tell the user you cannot reach their files; check first.
 - `mail export <id-or-attachment-path> --to <sandbox-dir> [--name <file>]` —
@@ -102,7 +102,7 @@ disk are only the bodies downloaded so far.
   (e.g. to read/compile received `.xlsx` files, which have no in-room view).
   `<id>` exports every attachment on the message; `--name` picks one. `--to`
   must be your sandbox's outputs (or uploads) folder.
-- `mail settings` — open the Mailroom settings page in the user's browser
+- `mail settings` — open the Message Operator settings page in the user's browser
   (dry run on/off, allowed recipient domains, removing mailboxes). Run it
   whenever the user wants to change how sending works or disconnect an
   account. You can OPEN the page; only the user can change anything there —
@@ -189,7 +189,7 @@ sandbox's files. A file in one is invisible to the other until you bridge it:
 - **To email a file sitting in one of the user's own folders** (Downloads,
   Documents, Desktop): same two steps, no sandbox involved. The room runs on
   their machine, so `mail import /Users/me/Downloads/scan.jpg` (or the Windows
-  equivalent) just works. Locate the file with `mailroom_bash` first if you were
+  equivalent) just works. Locate the file with `messageoperator_bash` first if you were
   given a description rather than a path.
   The one case that genuinely CANNOT work is a file that lives only in a
   separate cloud sandbox: that is another machine with no shared disk, and
@@ -220,10 +220,10 @@ listed by `mail read` next to the attachment:
 mailed in:
 
 1. `mail read <message>` — find the attachment and its `(View: ....md)`.
-2. Read the view (`mailroom_view` tool or `cat`). Pending tracked changes, if any,
+2. Read the view (`messageoperator_view` tool or `cat`). Pending tracked changes, if any,
    appear as CriticMarkup: `{++insertion++}`, `{--deletion--}`,
    `{>>annotations<<}`.
-3. Edit the view with `mailroom_str_replace` — change exactly the text you want
+3. Edit the view with `messageoperator_str_replace` — change exactly the text you want
    changed, leave everything else byte-identical. Don't add CriticMarkup
    yourself; write the text as it should read. NOTE: pack diffs at the
    word/token level, not the sentence level — an edit like "1 year" -> "2
@@ -257,7 +257,7 @@ Spreadsheet (`.xlsx`/`.xls`/`.xlsm`) and delimited (`.csv`/`.tsv`) attachments
 are parsed at sync time into TWO things beside the raw file:
 
 1. A readable `.md` table view, listed by `mail read` next to the attachment
-   just like a PDF/DOCX view — `cat` it (or `mailroom_view`) to see the data
+   just like a PDF/DOCX view — `cat` it (or `messageoperator_view`) to see the data
    inline. Large tables are TRUNCATED in this view (first rows + last rows,
    with the true total stated); a truncated view is never the whole table.
 2. A structured sidecar the `mail table` verb queries for anything the
@@ -314,7 +314,7 @@ run to test a batch, and count your simulated attempts against it.
 
 Similarly, **`mail fetch` outcomes (FETCHED/REJECTED) are lazy**; they are processed at the end of the current command and their result is printed in the current command's `send_results`. However, the actual fetched body text only becomes available to read (`mail read <id>`) in your NEXT command.
 
-**The authoritative outcome is the `send_results` field of the mailroom_bash
+**The authoritative outcome is the `send_results` field of the messageoperator_bash
 result that ran `mail send`.** The `NOTE:` line in stdout is a prediction
 printed before the send was executed; `send_results` is written after, and
 says what actually happened: `SENT` (delivered), `SIMULATED` (dry_run on),
@@ -365,14 +365,14 @@ or building customized digest files).
 
 To do this:
 
-1. Write your script to a file (e.g. `mailroom_create_file` at `scripts/digest.py`).
+1. Write your script to a file (e.g. `messageoperator_create_file` at `scripts/digest.py`).
 2. Read the filesystem directly under `accounts/` (all messages are
    standard RFC 2822 `.eml` files) — remembering those are only the
    downloaded bodies; drive anything that must be complete off
    `mail index` / `mail search` TSV instead.
 3. Call standard Python libraries (`email`, `json`, `re`) for parsing and
    generation.
-4. Execute via `mailroom_bash` with `python3 scripts/digest.py`.
+4. Execute via `messageoperator_bash` with `python3 scripts/digest.py`.
 
 ## Composition
 

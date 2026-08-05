@@ -1,45 +1,85 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { cleanEnvValue, loadConfig } from "../src/config.js";
-import { mailroomHome } from "../src/layout.js";
+import { adoptLegacyEnv } from "../src/env.js";
+import { defaultStateHome, stateHome } from "../src/layout.js";
 import { tmpHome } from "./helpers.js";
 
-const saved = process.env.MAILROOM_HOME;
+const saved = process.env.MESSAGEOPERATOR_HOME;
 afterEach(() => {
-  if (saved === undefined) delete process.env.MAILROOM_HOME;
-  else process.env.MAILROOM_HOME = saved;
+  if (saved === undefined) delete process.env.MESSAGEOPERATOR_HOME;
+  else process.env.MESSAGEOPERATOR_HOME = saved;
 });
 
-describe("mailroomHome hardening (Claude Desktop env templates)", () => {
-  const fallback = path.join(os.homedir(), "mailroom");
+describe("stateHome hardening (Claude Desktop env templates)", () => {
+  // whatever the probe decides on this machine — the guard paths must all
+  // land on the same default
+  const fallback = defaultStateHome();
 
   it("falls back when the env var is unset or empty", () => {
-    delete process.env.MAILROOM_HOME;
-    expect(mailroomHome()).toBe(fallback);
-    process.env.MAILROOM_HOME = "   ";
-    expect(mailroomHome()).toBe(fallback);
+    delete process.env.MESSAGEOPERATOR_HOME;
+    expect(stateHome()).toBe(fallback);
+    process.env.MESSAGEOPERATOR_HOME = "   ";
+    expect(stateHome()).toBe(fallback);
   });
 
   it("falls back on an unresolved ${...} template passed through literally", () => {
-    process.env.MAILROOM_HOME = "${user_config.mailroom_home}";
-    expect(mailroomHome()).toBe(fallback);
-    process.env.MAILROOM_HOME = "${HOME}/mailroom";
-    expect(mailroomHome()).toBe(fallback);
+    process.env.MESSAGEOPERATOR_HOME = "${user_config.state_home}";
+    expect(stateHome()).toBe(fallback);
+    process.env.MESSAGEOPERATOR_HOME = "${HOME}/messageoperator";
+    expect(stateHome()).toBe(fallback);
   });
 
   it("falls back on relative paths (cwd may be / under Claude Desktop)", () => {
-    process.env.MAILROOM_HOME = "mailroom-state";
-    expect(mailroomHome()).toBe(fallback);
+    process.env.MESSAGEOPERATOR_HOME = "messageoperator-state";
+    expect(stateHome()).toBe(fallback);
   });
 
   it("expands ~ and accepts absolute paths", () => {
-    process.env.MAILROOM_HOME = "~/custom-mailroom";
-    expect(mailroomHome()).toBe(path.join(os.homedir(), "custom-mailroom"));
+    process.env.MESSAGEOPERATOR_HOME = "~/custom-state";
+    expect(stateHome()).toBe(path.join(os.homedir(), "custom-state"));
     const abs = tmpHome();
-    process.env.MAILROOM_HOME = abs;
-    expect(mailroomHome()).toBe(abs);
+    process.env.MESSAGEOPERATOR_HOME = abs;
+    expect(stateHome()).toBe(abs);
+  });
+});
+
+describe("defaultStateHome legacy probe (v0.6 rename)", () => {
+  it("prefers ~/messageoperator, keeps an existing ~/mailroom, modern wins", () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "mo-home-"));
+    const spy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    try {
+      // neither exists: fresh installs get the new name
+      expect(defaultStateHome()).toBe(path.join(fakeHome, "messageoperator"));
+      // only the pre-rename dir exists: existing data keeps being used
+      fs.mkdirSync(path.join(fakeHome, "mailroom"));
+      expect(defaultStateHome()).toBe(path.join(fakeHome, "mailroom"));
+      // both exist: the canonical dir wins
+      fs.mkdirSync(path.join(fakeHome, "messageoperator"));
+      expect(defaultStateHome()).toBe(path.join(fakeHome, "messageoperator"));
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("adoptLegacyEnv (v0.6 rename)", () => {
+  it("adopts MAILROOM_* values without clobbering canonical names", () => {
+    const env: NodeJS.ProcessEnv = {
+      MAILROOM_HOME: "/legacy",
+      MAILROOM_DRY_RUN: "false",
+      MESSAGEOPERATOR_DRY_RUN: "true",
+      UNRELATED: "x",
+    };
+    adoptLegacyEnv(env);
+    expect(env.MESSAGEOPERATOR_HOME).toBe("/legacy");
+    expect(env.MESSAGEOPERATOR_DRY_RUN).toBe("true"); // canonical wins
+    expect(env.MAILROOM_HOME).toBe("/legacy"); // originals stay for stripping
+    expect(env.UNRELATED).toBe("x");
   });
 });
 
@@ -59,15 +99,15 @@ describe("ambient gmail password binding", () => {
     const { makeLayout, makeConfig } = await import("./helpers.js");
     const layout = makeLayout();
     // attacker@ is the SOLE configured gmail account (agent-added), and an
-    // ambient keychain password exists without MAILROOM_GMAIL_ADDRESS —
+    // ambient keychain password exists without MESSAGEOPERATOR_GMAIL_ADDRESS —
     // the password must NOT bind to it
     const cfg = makeConfig({
       accounts: [{ provider: "gmail", address: "attacker@gmail.com" }],
     });
-    const env = { MAILROOM_GMAIL_APP_PW: "abcdabcdabcdabcd" };
+    const env = { MESSAGEOPERATOR_GMAIL_APP_PW: "abcdabcdabcdabcd" };
     expect(gmailAppPassword(layout, cfg, "attacker@gmail.com", env)).toBeNull();
     // with the env address set, it binds only to that address
-    const named = { ...env, MAILROOM_GMAIL_ADDRESS: "me@gmail.com" };
+    const named = { ...env, MESSAGEOPERATOR_GMAIL_ADDRESS: "me@gmail.com" };
     expect(
       gmailAppPassword(layout, cfg, "attacker@gmail.com", named),
     ).toBeNull();
@@ -78,8 +118,8 @@ describe("ambient gmail password binding", () => {
 
   it("rejects malformed env addresses that would become directory names", () => {
     const cfg = loadConfig(path.join(tmpHome(), "none.json"), {
-      MAILROOM_GMAIL_ADDRESS: "first..last@gmail.com",
-      MAILROOM_MS_ADDRESS: "mailto:user@x com/../evil",
+      MESSAGEOPERATOR_GMAIL_ADDRESS: "first..last@gmail.com",
+      MESSAGEOPERATOR_MS_ADDRESS: "mailto:user@x com/../evil",
     });
     expect(cfg.accounts).toEqual([]);
   });
@@ -88,11 +128,11 @@ describe("ambient gmail password binding", () => {
 describe("config env merge ignores unresolved templates", () => {
   it("does not create accounts or flip dry_run from template garbage", () => {
     const cfg = loadConfig(path.join(tmpHome(), "none.json"), {
-      MAILROOM_GMAIL_ADDRESS: "${user_config.gmail_address}",
-      MAILROOM_MS_ADDRESS: "${user_config.microsoft_address}",
-      MAILROOM_MS_CLIENT_ID: "${user_config.microsoft_client_id}",
-      MAILROOM_DRY_RUN: "${user_config.dry_run}",
-      MAILROOM_ALLOWED_RECIPIENT_DOMAINS:
+      MESSAGEOPERATOR_GMAIL_ADDRESS: "${user_config.gmail_address}",
+      MESSAGEOPERATOR_MS_ADDRESS: "${user_config.microsoft_address}",
+      MESSAGEOPERATOR_MS_CLIENT_ID: "${user_config.microsoft_client_id}",
+      MESSAGEOPERATOR_DRY_RUN: "${user_config.dry_run}",
+      MESSAGEOPERATOR_ALLOWED_RECIPIENT_DOMAINS:
         "${user_config.allowed_recipient_domains}",
     });
     expect(cfg.accounts).toEqual([]);

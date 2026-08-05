@@ -1,5 +1,5 @@
 /**
- * The Mailroom settings page: a one-shot loopback control panel.
+ * The Message Operator settings page: a one-shot loopback control panel.
  *
  * Policy (dry_run, recipient allowlist) and account removal are the user's
  * to change, never the agent's — a prompt-injected email must not be able to
@@ -217,10 +217,10 @@ function renderPage(state: SettingsState, notice: string | null): string {
     : `<p class="note">No mailboxes connected yet — ask Claude to “connect my mailbox you@example.com”.</p>`;
 
   return pageChrome(
-    "Mailroom settings",
+    "Message Operator settings",
     `${notice ? `<div class="trust" style="margin-bottom:1rem;">${escapeHtml(notice)}</div>` : ""}
   <div class="card">
-    <h1>Mailroom settings</h1>
+    <h1>Message Operator settings</h1>
     <p class="note">Claude can open this page but cannot click anything here — only you can.
     Changes are saved on this computer and apply from your next chat message.</p>
 
@@ -247,9 +247,9 @@ function renderPage(state: SettingsState, notice: string | null): string {
     </form>
   </div>
   <div class="trust">
-    Everything on this page lives in <span style="font-family:ui-monospace,monospace;">~/mailroom/broker/</span>
+    Everything on this page lives in <span style="font-family:ui-monospace,monospace;">~/messageoperator/broker/</span>
     on this computer. Nothing is sent to Adeu or Anthropic. Turning dry run off means
-    Mailroom really delivers mail — the recipient allowlist above still applies.
+    Message Operator really delivers mail — the recipient allowlist above still applies.
   </div>`,
   );
 }

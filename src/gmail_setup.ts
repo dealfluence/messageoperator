@@ -175,7 +175,7 @@ export class GmailSetupFlow {
               return;
             }
             // Gmail unreachable, not a refusal: accept with a warning (same
-            // call as `mailroom set-gmail-password`); the next sync will tell.
+            // call as `messageoperator set-gmail-password`); the next sync will tell.
             opts.onStored?.(addr, password);
             respondHtml(res, donePage(addr, true));
             finish("ok_unverified");
@@ -311,10 +311,10 @@ export function pageChrome(title: string, body: string): string {
 <body><div class="page">
   <header>
     ${ADEU_MARK}
-    <div class="wordmark">Mailroom<small>by Adeu</small></div>
+    <div class="wordmark">Message Operator<small>by Adeu</small></div>
   </header>
   ${body}
-  <footer>Mailroom by <a href="https://adeu.ai" target="_blank" rel="noopener noreferrer">Adeu</a>
+  <footer>Message Operator by <a href="https://adeu.ai" target="_blank" rel="noopener noreferrer">Adeu</a>
   &nbsp;·&nbsp; running locally on your computer</footer>
 </div></body></html>`;
 }
@@ -325,16 +325,16 @@ function trustPanel(): string {
     <h2>Where your code is kept</h2>
     <ul>
       <li><b>Only on this computer.</b> The code is saved under
-        <code>~/mailroom/broker/credentials/</code>, outside the AI&nbsp;agent's
+        <code>~/messageoperator/broker/credentials/</code>, outside the AI&nbsp;agent's
         workspace, and never appears in your conversation.</li>
-      <li><b>Never sent to Adeu or Anthropic.</b> Mailroom has no cloud
+      <li><b>Never sent to Adeu or Anthropic.</b> Message Operator has no cloud
         service — the code is used by this computer only, to connect directly
         to Google's mail servers over an encrypted connection.</li>
       <li><b>Revocable any time.</b> Delete it at
         <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">Google App Passwords</a>
-        and Mailroom's access ends immediately. Your real Google password is
+        and Message Operator's access ends immediately. Your real Google password is
         never used or stored.</li>
-      <li><b>This page is local.</b> It is served by Mailroom itself at
+      <li><b>This page is local.</b> It is served by Message Operator itself at
         <code>127.0.0.1</code> on your machine — it is not a website, and it
         makes no requests anywhere except when you submit, to verify the code
         with Gmail.</li>
@@ -345,10 +345,10 @@ function trustPanel(): string {
 function wizardPage(address: string, error: string | null): string {
   const addr = escapeHtml(address);
   return pageChrome(
-    `Connect ${addr} to Mailroom`,
+    `Connect ${addr} to Message Operator`,
     `<div class="card">
     <h1>Connect <span class="addr">${addr}</span></h1>
-    <p>Mailroom reads and sends your mail with a Google <b>app password</b> —
+    <p>Message Operator reads and sends your mail with a Google <b>app password</b> —
     a 16-letter code that works only for mail apps and can be revoked any
     time. Two steps:</p>
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
@@ -356,7 +356,7 @@ function wizardPage(address: string, error: string | null): string {
       <li>
         <a class="btn" href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">Open Google App Passwords&nbsp;↗</a>
         <p>Sign in as <span class="addr">${addr}</span> (check the avatar in
-        the top-right corner). Type <b>Mailroom</b> as the app name and click
+        the top-right corner). Type <b>Message Operator</b> as the app name and click
         <b>Create</b>.</p>
         <p class="note">If Google says app passwords are not available, turn on
         <a href="https://myaccount.google.com/signinoptions/twosv" target="_blank" rel="noopener noreferrer">2-Step Verification</a>
@@ -385,7 +385,7 @@ function donePage(address: string, unverified: boolean): string {
        problem), so it was stored as-is. If <code>mail status</code> still
        shows a problem after the next sync, run the setup again.</p>`
     : `<p>The code was verified with Gmail and saved on this computer —
-       under <code>~/mailroom/broker/credentials/</code>, outside the
+       under <code>~/messageoperator/broker/credentials/</code>, outside the
        AI&nbsp;agent's workspace. It was not sent to Adeu, Anthropic, or any
        cloud service, and it never appears in your conversation.</p>`;
   return pageChrome(

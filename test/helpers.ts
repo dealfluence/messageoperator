@@ -10,7 +10,7 @@ import type { Config } from "../src/config.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
 export function tmpHome(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "mailroom-test-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "messageoperator-test-"));
 }
 
 export function makeLayout(): Layout {
