@@ -188,7 +188,7 @@ describe("mail CLI (python/sqlite)", () => {
     const full = path.join(layout.room, rel);
     fs.writeFileSync(
       full + ".meta",
-      "X-Mailroom-Sha: x\nX-Mailroom-Account: a@gmail.com\n\nmeta body wins\n",
+      "X-Messageoperator-Sha: x\nX-Messageoperator-Account: a@gmail.com\n\nmeta body wins\n",
     );
     const out = mail(layout, ["read", rel]).stdout;
     expect(out).toContain("Subject: hello");
@@ -201,9 +201,9 @@ describe("mail CLI (python/sqlite)", () => {
     const full = path.join(layout.room, rel);
     fs.writeFileSync(
       full + ".meta",
-      "X-Mailroom-Sha: x\nX-Mailroom-Account: a@gmail.com\n" +
-        "X-Mailroom-Attachments: attachments/x/report.pdf\n" +
-        "X-Mailroom-Attachment-Views: attachments/x/report.pdf.md\n" +
+      "X-Messageoperator-Sha: x\nX-Messageoperator-Account: a@gmail.com\n" +
+        "X-Messageoperator-Attachments: attachments/x/report.pdf\n" +
+        "X-Messageoperator-Attachment-Views: attachments/x/report.pdf.md\n" +
         "\nbody\n",
     );
     const out = mail(layout, ["read", sha]).stdout;

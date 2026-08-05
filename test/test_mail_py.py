@@ -679,10 +679,10 @@ class ExportTests(MailCliTestBase):
             "Message-ID: <r-1@x.com>\r\n\r\nbody\r\n"
         )
         meta = (
-            f"X-Mailroom-Sha: {sha}\n"
-            "X-Mailroom-Account: me@adeu.ai\n"
-            f"X-Mailroom-Attachments: attachments/{sha}/Invoice.pdf\n"
-            f"X-Mailroom-Attachments: attachments/{sha}/Receipt.pdf\n"
+            f"X-Messageoperator-Sha: {sha}\n"
+            "X-Messageoperator-Account: me@adeu.ai\n"
+            f"X-Messageoperator-Attachments: attachments/{sha}/Invoice.pdf\n"
+            f"X-Messageoperator-Attachments: attachments/{sha}/Receipt.pdf\n"
             "\nbody\n"
         )
         p = self.write_inbound("me@adeu.ai", "200.bbbb.eml", raw, meta=meta)
@@ -1190,7 +1190,7 @@ class TableVerbTests(MailCliTestBase):
 
     def test_table_with_eml_path_reads_sidecar_from_meta(self):
         """Passing an .eml message file path to `mail table <path>` must locate
-        the tabular sidecar recorded in its .meta file (X-Mailroom-Attachment-Tables:
+        the tabular sidecar recorded in its .meta file (X-Messageoperator-Attachment-Tables:
         attachments/<sha>/<name>.tabular.db) rather than expecting a non-existent
         <EML_PATH>.tabular.db file."""
         sha = "1700000009sha0"
@@ -1209,9 +1209,9 @@ class TableVerbTests(MailCliTestBase):
             "Financial results attached.\r\n"
         )
         meta = (
-            f"X-Mailroom-Sha: {sha}\n"
-            "X-Mailroom-Account: user@example.com\n"
-            f"X-Mailroom-Attachment-Tables: attachments/{sha}/financials.xlsx.tabular.db\n"
+            f"X-Messageoperator-Sha: {sha}\n"
+            "X-Messageoperator-Account: user@example.com\n"
+            f"X-Messageoperator-Attachment-Tables: attachments/{sha}/financials.xlsx.tabular.db\n"
         )
         eml_path = self.write_inbound(
             "user@example.com", "1700000009.sha00000009.eml", eml_raw, meta=meta
@@ -1222,6 +1222,29 @@ class TableVerbTests(MailCliTestBase):
         out = proc.stdout
         self.assertIn("Orders", out)
         self.assertIn("2 rows × 3 cols", out)
+
+    def test_read_and_export_legacy_mailroom_meta_headers(self):
+        """Rooms that predate the Mailroom -> Message Operator rename still have
+        X-Mailroom-* .meta sidecars sitting on disk, and mail.py must keep
+        reading them. The header names below are deliberate back-compat, NOT
+        rename leftovers: do not translate them to X-Messageoperator-*."""
+        sha = "deadbeef1234"
+        att_dir = self.attachments / sha
+        att_dir.mkdir(parents=True, exist_ok=True)
+        (att_dir / "Legacy.pdf").write_bytes(b"%PDF-1.4 legacy")
+        raw = (
+            "From: v@x.com\r\nTo: me@adeu.ai\r\nSubject: legacy\r\n"
+            "Message-ID: <leg@x.com>\r\n\r\nbody\r\n"
+        )
+        meta = (
+            f"X-Mailroom-Sha: {sha}\n"
+            "X-Mailroom-Account: me@adeu.ai\n"
+            f"X-Mailroom-Attachments: attachments/{sha}/Legacy.pdf\n"
+            "\nbody\n"
+        )
+        p = self.write_inbound("me@adeu.ai", "201.cccc.eml", raw, meta=meta)
+        proc = self.run_mail("read", self.rel(p), expect_code=0)
+        self.assertIn("Legacy.pdf", proc.stdout)
 
 
 class ReadPaginationTests(MailCliTestBase):

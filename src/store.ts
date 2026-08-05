@@ -230,13 +230,14 @@ export async function storeMessage(
   const tableRel = att.tables.map((n) => `attachments/${sha}/${n}`);
 
   const metaLines = [
-    `X-Mailroom-Sha: ${sha}`,
-    `X-Mailroom-Account: ${account}`,
+    `X-Messageoperator-Sha: ${sha}`,
+    `X-Messageoperator-Account: ${account}`,
   ];
-  for (const p of attRel) metaLines.push(`X-Mailroom-Attachments: ${p}`);
-  for (const p of viewRel) metaLines.push(`X-Mailroom-Attachment-Views: ${p}`);
+  for (const p of attRel) metaLines.push(`X-Messageoperator-Attachments: ${p}`);
+  for (const p of viewRel)
+    metaLines.push(`X-Messageoperator-Attachment-Views: ${p}`);
   for (const p of tableRel)
-    metaLines.push(`X-Mailroom-Attachment-Tables: ${p}`);
+    metaLines.push(`X-Messageoperator-Attachment-Tables: ${p}`);
   const metaPath = dest + ".meta";
   fs.writeFileSync(metaPath, metaLines.join("\n") + "\n\n" + body + "\n");
 
@@ -315,13 +316,14 @@ export async function storeFetchedBody(
   const tableRel = att.tables.map((n) => `attachments/${contentSha}/${n}`);
 
   const metaLines = [
-    `X-Mailroom-Sha: ${contentSha}`,
-    `X-Mailroom-Account: ${row.account}`,
+    `X-Messageoperator-Sha: ${contentSha}`,
+    `X-Messageoperator-Account: ${row.account}`,
   ];
-  for (const p of attRel) metaLines.push(`X-Mailroom-Attachments: ${p}`);
-  for (const p of viewRel) metaLines.push(`X-Mailroom-Attachment-Views: ${p}`);
+  for (const p of attRel) metaLines.push(`X-Messageoperator-Attachments: ${p}`);
+  for (const p of viewRel)
+    metaLines.push(`X-Messageoperator-Attachment-Views: ${p}`);
   for (const p of tableRel)
-    metaLines.push(`X-Mailroom-Attachment-Tables: ${p}`);
+    metaLines.push(`X-Messageoperator-Attachment-Tables: ${p}`);
   const metaPath = dest + ".meta";
   fs.writeFileSync(metaPath, metaLines.join("\n") + "\n\n" + body + "\n");
 

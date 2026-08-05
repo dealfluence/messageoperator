@@ -59,7 +59,7 @@ describe("storeMessage", () => {
     expect(fs.readFileSync(dest!)).toEqual(raw);
 
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
-    expect(meta).toContain(`X-Mailroom-Sha: ${sha}`);
+    expect(meta).toContain(`X-Messageoperator-Sha: ${sha}`);
     expect(meta).toContain("Numbers inside.");
 
     expect(index.hasSha(sha)).toBe(true);
@@ -194,7 +194,7 @@ describe("storeMessage", () => {
     );
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachments: attachments/${sha}/report.pdf`,
+      `X-Messageoperator-Attachments: attachments/${sha}/report.pdf`,
     );
   });
 
@@ -229,16 +229,16 @@ describe("storeMessage", () => {
 
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachments: attachments/${sha}/contract.docx`,
+      `X-Messageoperator-Attachments: attachments/${sha}/contract.docx`,
     );
     expect(meta).toContain(
-      `X-Mailroom-Attachment-Views: attachments/${sha}/contract.docx.md`,
+      `X-Messageoperator-Attachment-Views: attachments/${sha}/contract.docx.md`,
     );
     expect(meta).toContain(
-      `X-Mailroom-Attachment-Views: attachments/${sha}/invoice.pdf.md`,
+      `X-Messageoperator-Attachment-Views: attachments/${sha}/invoice.pdf.md`,
     );
     expect(meta).not.toContain(
-      `X-Mailroom-Attachment-Views: attachments/${sha}/data.bin.md`,
+      `X-Messageoperator-Attachment-Views: attachments/${sha}/data.bin.md`,
     );
   });
 
@@ -274,7 +274,7 @@ describe("storeMessage", () => {
     // the view is still offered to the agent (this part works today)
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachment-Views: attachments/${sha}/scan.pdf.md`,
+      `X-Messageoperator-Attachment-Views: attachments/${sha}/scan.pdf.md`,
     );
 
     const view = fs.readFileSync(viewPath, "utf-8");
@@ -308,9 +308,9 @@ describe("storeMessage", () => {
     ]);
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachments: attachments/${sha}/broken.docx`,
+      `X-Messageoperator-Attachments: attachments/${sha}/broken.docx`,
     );
-    expect(meta).not.toContain("X-Mailroom-Attachment-Views:");
+    expect(meta).not.toContain("X-Messageoperator-Attachment-Views:");
   });
 
   it("never overwrites a real attachment with a generated view", async () => {
@@ -378,10 +378,10 @@ describe("storeMessage", () => {
     // both meta lines are present
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachment-Views: attachments/${sha}/employees.xlsx.md`,
+      `X-Messageoperator-Attachment-Views: attachments/${sha}/employees.xlsx.md`,
     );
     expect(meta).toContain(
-      `X-Mailroom-Attachment-Tables: attachments/${sha}/employees.xlsx.tabular.db`,
+      `X-Messageoperator-Attachment-Tables: attachments/${sha}/employees.xlsx.tabular.db`,
     );
   });
 
@@ -404,7 +404,7 @@ describe("storeMessage", () => {
     expect(fs.existsSync(path.join(attDir, "order.csv.tabular.db"))).toBe(true);
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachment-Tables: attachments/${sha}/order.csv.tabular.db`,
+      `X-Messageoperator-Attachment-Tables: attachments/${sha}/order.csv.tabular.db`,
     );
   });
 
@@ -435,9 +435,9 @@ describe("storeMessage", () => {
     );
     const meta = fs.readFileSync(dest + ".meta", "utf-8");
     expect(meta).toContain(
-      `X-Mailroom-Attachments: attachments/${sha}/broken.xlsx`,
+      `X-Messageoperator-Attachments: attachments/${sha}/broken.xlsx`,
     );
-    expect(meta).not.toContain("X-Mailroom-Attachment-Tables:");
+    expect(meta).not.toContain("X-Messageoperator-Attachment-Tables:");
   });
 
   it("adds explained paths for the audit", async () => {
