@@ -25,6 +25,9 @@ mailroom-ingest/
 blobs/
 credentials/
 gmail_app_pw*
+master_key*
+*.dpapi
+msal_token_cache*
 *.intent.json
 *.eml
 *.token

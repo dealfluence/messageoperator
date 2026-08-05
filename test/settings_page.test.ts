@@ -10,8 +10,8 @@ import {
   saveSettingsPage,
 } from "../src/config.js";
 import { SettingsPageFlow, type SettingsState } from "../src/settings_page.js";
-import { storeGmailAppPassword } from "../src/creds.js";
-import { tmpHome } from "./helpers.js";
+import { gmailAppPassword, storeGmailAppPassword } from "../src/creds.js";
+import { makeConfig, tmpHome } from "./helpers.js";
 
 function configPath(): string {
   return path.join(tmpHome(), "config.json");
@@ -179,7 +179,7 @@ describe("settings page flow", () => {
 });
 
 describe("broker settings integration", () => {
-  function makeBroker(): Broker {
+  async function makeBroker(): Promise<Broker> {
     const broker = new Broker(tmpHome(), {
       mode: "boundary",
       gmailSync: async () => {},
@@ -202,7 +202,7 @@ describe("broker settings integration", () => {
   }
 
   it("a `mail settings` request opens the page and ledgers it", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const opened: string[] = [];
     broker.settingsPage.ensureFlow = async () => {
       const url = "http://127.0.0.1:9999/settings/fake";
@@ -222,7 +222,7 @@ describe("broker settings integration", () => {
   });
 
   it("account removal deletes credential + config entry and queued local mail on next cycle", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     let hooks: any;
     broker.settingsPage.ensureFlow = async (opts) => {
       hooks = opts;
@@ -252,11 +252,11 @@ describe("broker settings integration", () => {
     await broker.push(); // opens page, captures hooks
     await hooks.onRemoveAccount("a@gmail.com", true); // the human clicks Remove
 
-    const credential = path.join(
-      broker.layout.credentials,
-      "gmail_app_pw.a@gmail.com",
-    );
-    expect(fs.existsSync(credential)).toBe(false);
+    // asserted through the resolver, not a file path: on macOS/Windows the
+    // secret lives in the OS store, so a missing file would prove nothing
+    expect(
+      await gmailAppPassword(broker.layout, makeConfig(), "a@gmail.com", {}),
+    ).toBeNull();
     expect(loadConfig(broker.layout.configPath, {}).accounts).toEqual([]);
     expect(
       broker.ledger.readAll().some((r) => r.op === "account_removed"),
@@ -278,7 +278,7 @@ describe("broker settings integration", () => {
     // mail — and the deleted account's messages are still listed. `mail index`
     // and `mail search` read the store, not the maildir, so deleting the files
     // alone leaves rows pointing at .eml paths that no longer exist.
-    const broker = makeBroker();
+    const broker = await makeBroker();
     let hooks: any;
     broker.settingsPage.ensureFlow = async (opts) => {
       hooks = opts;
@@ -345,7 +345,7 @@ describe("broker settings integration", () => {
     // The other half of the contract: "keep the local copy" exists so the user
     // can still read that mail offline, so the rows must survive. Only the
     // credential, the config entry, and the sync watermarks go.
-    const broker = makeBroker();
+    const broker = await makeBroker();
     let hooks: any;
     broker.settingsPage.ensureFlow = async (opts) => {
       hooks = opts;
@@ -387,7 +387,7 @@ describe("broker settings integration", () => {
     // without an immediate republish, "remove the account, then list emails"
     // could read a status file still listing the mailbox as connected — and
     // present a removed mailbox's mail as live.
-    const broker = makeBroker();
+    const broker = await makeBroker();
     let hooks: any;
     broker.settingsPage.ensureFlow = async (opts) => {
       hooks = opts;
@@ -414,7 +414,7 @@ describe("broker settings integration", () => {
     // `mail archive` reads dry_run from the status file to tell the user whether
     // the change will be simulated; a stale file announces the opposite of what
     // the broker will actually do
-    const broker = makeBroker();
+    const broker = await makeBroker();
     let hooks: any;
     broker.settingsPage.ensureFlow = async (opts) => {
       hooks = opts;
@@ -441,7 +441,7 @@ describe("broker settings integration", () => {
   });
 
   it("safety saved from the page beats the extension env on the next cycle", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     let hooks: any;
     broker.settingsPage.ensureFlow = async (opts) => {
       hooks = opts;

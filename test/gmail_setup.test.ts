@@ -170,6 +170,30 @@ describe("gmail setup flow", () => {
     expect(flow.outcome(ADDRESS)).toBe("ok");
   });
 
+  it("surfaces a REJECTED async store the same way (keychain writes are async)", async () => {
+    const flow = makeFlow();
+    let attempt = 0;
+    const url = await flow.ensureFlow(ADDRESS, {
+      verify: async () => {},
+      // what a locked keychain / missing PowerShell actually looks like: the
+      // rejection lands after handleSubmit has already awaited it
+      onStored: async () => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("keychain write failed: exit 36");
+      },
+    });
+
+    const failedPage = await (
+      await postPassword(url, "abcdefghijklmnop")
+    ).text();
+    expect(failedPage).toContain("NOT stored");
+    expect(flow.pendingUrls()).toEqual({ [ADDRESS]: url }); // retryable
+
+    const retry = await postPassword(url, "abcdefghijklmnop");
+    expect((await retry.text()).toLowerCase()).toContain("connected");
+    expect(flow.outcome(ADDRESS)).toBe("ok");
+  });
+
   it("closeAll tears down pending listeners", async () => {
     const flow = makeFlow();
     const url = await flow.ensureFlow(ADDRESS, { verify: async () => {} });

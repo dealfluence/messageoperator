@@ -27,6 +27,7 @@ import { AddressInfo } from "node:net";
 
 import { GmailAuthError, verifyLogin } from "./gmail.js";
 import { openBrowser } from "./msgraph.js";
+import { secretStorageDescription } from "./secrets.js";
 import { log } from "./log.js";
 
 const SETUP_TIMEOUT_MS = 15 * 60_000; // creating an app password takes a while
@@ -35,8 +36,12 @@ const MAX_BODY_BYTES = 8192;
 export interface GmailSetupOptions {
   /** IMAP credential check; defaults to a real Gmail login round trip. */
   verify?: (address: string, password: string) => Promise<void>;
-  /** Called with the accepted password; the broker stores it. */
-  onStored?: (address: string, password: string) => void;
+  /**
+   * Called with the accepted password; the broker stores it. Awaited — storing
+   * shells out to the OS keychain, and a rejected write has to reach
+   * handleSubmit's catch so the page says "NOT stored" instead of "connected".
+   */
+  onStored?: (address: string, password: string) => void | Promise<void>;
   autoOpen?: boolean;
 }
 
@@ -176,7 +181,7 @@ export class GmailSetupFlow {
             }
             // Gmail unreachable, not a refusal: accept with a warning (same
             // call as `messageoperator set-gmail-password`); the next sync will tell.
-            opts.onStored?.(addr, password);
+            await opts.onStored?.(addr, password);
             respondHtml(res, donePage(addr, true));
             finish("ok_unverified");
             log.warn(
@@ -184,7 +189,7 @@ export class GmailSetupFlow {
             );
             return;
           }
-          opts.onStored?.(addr, password);
+          await opts.onStored?.(addr, password);
           respondHtml(res, donePage(addr, false));
           finish("ok");
           log.info(`gmail setup: app password verified and stored for ${addr}`);
@@ -324,9 +329,9 @@ function trustPanel(): string {
   return `<div class="trust">
     <h2>Where your code is kept</h2>
     <ul>
-      <li><b>Only on this computer.</b> The code is saved under
-        <code>~/messageoperator/broker/credentials/</code>, outside the AI&nbsp;agent's
-        workspace, and never appears in your conversation.</li>
+      <li><b>Only on this computer.</b> The code is saved in
+        ${escapeHtml(secretStorageDescription())} — outside the AI&nbsp;agent's
+        workspace, and it never appears in your conversation.</li>
       <li><b>Never sent to Adeu or Anthropic.</b> Message Operator has no cloud
         service — the code is used by this computer only, to connect directly
         to Google's mail servers over an encrypted connection.</li>
@@ -384,10 +389,10 @@ function donePage(address: string, unverified: boolean): string {
     ? `<p><b>Note:</b> Gmail could not verify the code right now (network
        problem), so it was stored as-is. If <code>mail status</code> still
        shows a problem after the next sync, run the setup again.</p>`
-    : `<p>The code was verified with Gmail and saved on this computer —
-       under <code>~/messageoperator/broker/credentials/</code>, outside the
-       AI&nbsp;agent's workspace. It was not sent to Adeu, Anthropic, or any
-       cloud service, and it never appears in your conversation.</p>`;
+    : `<p>The code was verified with Gmail and saved on this computer — in
+       ${escapeHtml(secretStorageDescription())}, outside the AI&nbsp;agent's
+       workspace. It was not sent to Adeu, Anthropic, or any cloud service,
+       and it never appears in your conversation.</p>`;
   return pageChrome(
     `${addr} connected`,
     `<div class="card">

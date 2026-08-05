@@ -1,12 +1,20 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  authState,
   fetchBody,
   GraphHTTPError,
   sync,
   type RequestFn,
 } from "../src/msgraph.js";
 import { Rejection } from "../src/intents.js";
+import {
+  clearSecretCache,
+  readSealedFile,
+  writeSealedFile,
+} from "../src/secrets.js";
 import {
   makeConfig,
   makeIndex,
@@ -427,5 +435,98 @@ describe("on-demand body fetch (graph)", () => {
         getToken: async () => null,
       }),
     ).rejects.toBeInstanceOf(Rejection);
+  });
+});
+
+/**
+ * The token cache holds refresh tokens — the only state in the tree that
+ * cannot be rebuilt — so these tests drive the real MSAL cachePlugin hooks
+ * through authState() and assert on what lands on disk. No network: MSAL only
+ * reads its cache to answer getAllAccounts().
+ */
+describe("MSAL token cache at rest", () => {
+  /**
+   * Unified-schema cache with one signed-in account. The tenantProfiles entry
+   * is what makes MSAL report the username (it is the tenant profile, not the
+   * account entity, that account info is built from) and each profile really
+   * is a JSON *string* in the serialized form — see Deserializer.
+   */
+  function cacheJson(username: string): string {
+    return JSON.stringify({
+      Account: {
+        "uid.utid-login.microsoftonline.com-utid": {
+          home_account_id: "uid.utid",
+          environment: "login.microsoftonline.com",
+          realm: "utid",
+          local_account_id: "uid",
+          username,
+          client_info: "",
+          authority_type: "MSSTS",
+          tenantProfiles: [
+            JSON.stringify({
+              tenantId: "utid",
+              localAccountId: "uid",
+              username,
+              isHomeTenant: true,
+            }),
+          ],
+        },
+      },
+    });
+  }
+
+  it("is written encrypted, and read back", async () => {
+    const layout = makeLayout();
+    const enc = path.join(layout.credentials, "msal_token_cache.enc");
+    await writeSealedFile(layout, enc, cacheJson("m@outlook.com"));
+
+    expect(fs.readFileSync(enc, "utf-8")).not.toContain("m@outlook.com");
+    expect(await authState(layout, ACCT)).toBe("ok");
+    expect(
+      await authState(layout, { ...ACCT, address: "other@outlook.com" }),
+    ).toBe("needs_login");
+  });
+
+  it("migrates a plaintext cache from an older build and deletes it", async () => {
+    const layout = makeLayout();
+    const legacy = path.join(layout.credentials, "msal_token_cache.json");
+    const enc = path.join(layout.credentials, "msal_token_cache.enc");
+    const payload = cacheJson("m@outlook.com");
+    fs.writeFileSync(legacy, payload);
+
+    // the account still resolves, ...
+    expect(await authState(layout, ACCT)).toBe("ok");
+    // ... the plaintext copy is gone, and the ciphertext holds the same cache
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(fs.existsSync(enc)).toBe(true);
+    expect(await readSealedFile(layout, enc)).toBe(payload);
+    // and it keeps working from the encrypted copy alone
+    clearSecretCache();
+    expect(await authState(layout, ACCT)).toBe("ok");
+  });
+
+  it("treats an undecryptable cache as absent instead of throwing", async () => {
+    const layout = makeLayout();
+    const enc = path.join(layout.credentials, "msal_token_cache.enc");
+    await writeSealedFile(layout, enc, cacheJson("m@outlook.com"));
+    const blob = fs.readFileSync(enc);
+    blob[blob.length - 1] = (blob.at(-1) ?? 0) ^ 0xff;
+    fs.writeFileSync(enc, blob);
+
+    expect(await authState(layout, ACCT)).toBe("needs_login");
+    // the damaged file is left in place: only a real token write replaces it
+    expect(fs.existsSync(enc)).toBe(true);
+  });
+
+  it("never leaves the cache in plaintext next to the ciphertext", async () => {
+    const layout = makeLayout();
+    fs.writeFileSync(
+      path.join(layout.credentials, "msal_token_cache.json"),
+      cacheJson("m@outlook.com"),
+    );
+    await authState(layout, ACCT);
+    const names = fs.readdirSync(layout.credentials);
+    expect(names).toContain("msal_token_cache.enc");
+    expect(names).not.toContain("msal_token_cache.json");
   });
 });

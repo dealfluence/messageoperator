@@ -9,8 +9,9 @@
  * browser at the sign-in URL, and keeps syncing everything else. The pending
  * URL is published in `mail status` so the agent can hand it to the user;
  * `mail login` re-triggers the flow. Tokens land in the shared cache file
- * (broker/credentials/msal_token_cache.json — the same unified schema MSAL
- * Python used) and are matched to accounts by username, not accounts[0].
+ * (broker/credentials/msal_token_cache.enc — MSAL's unified schema, encrypted
+ * with the key from src/secrets.ts) and are matched to accounts by username,
+ * not accounts[0].
  *
  * Inbound sync uses Graph delta queries exactly like the Python POC: first
  * walk windowed to WINDOW_DAYS, then deltaLink-only polls; HTTP 410 falls
@@ -20,6 +21,7 @@
 
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { spawn, exec } from "node:child_process";
 import { AddressInfo } from "node:net";
 
@@ -36,6 +38,7 @@ import type { Index } from "./state.js";
 import type { Ledger } from "./ledger.js";
 import { storeMessage } from "./store.js";
 import { Rejection } from "./intents.js";
+import { readSealedFile, writeSealedFile } from "./secrets.js";
 import { log } from "./log.js";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -140,29 +143,77 @@ export const defaultRequestFn: RequestFn = async (
 
 // ---- auth ----------------------------------------------------------
 
+/**
+ * The token cache is refresh tokens — the only state in the tree that cannot
+ * be rebuilt from the network — so it is AES-256-GCM ciphertext on disk, with
+ * its key in the OS keychain (see src/secrets.ts). It is NOT put in the
+ * keychain itself: the cache grows with every account and keychain items are
+ * the wrong container for kilobytes of JSON.
+ */
 function cachePath(layout: Layout): string {
-  return `${layout.credentials}/msal_token_cache.json`;
+  return path.join(layout.credentials, "msal_token_cache.enc");
+}
+
+/** Where builds before the encryption change kept it, in plaintext. */
+function legacyCachePath(layout: Layout): string {
+  return path.join(layout.credentials, "msal_token_cache.json");
+}
+
+/**
+ * Serialized cache for MSAL, or null when there is none to load.
+ *
+ * A plaintext cache from an older build is encrypted and removed on the way
+ * through; if it cannot be encrypted (no key available) it is still USED, and
+ * left alone, so a locked keychain cannot sign the user out of everything.
+ */
+async function loadTokenCache(layout: Layout): Promise<string | null> {
+  const legacy = legacyCachePath(layout);
+  let plain: string | null = null;
+  try {
+    plain = fs.readFileSync(legacy, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") log.warn(`could not read ${legacy}: ${err}`);
+  }
+  if (plain !== null) {
+    if (await writeSealedFile(layout, cachePath(layout), plain)) {
+      fs.rmSync(legacy, { force: true });
+      log.info(
+        "encrypted the Microsoft token cache and removed the plain copy",
+      );
+    } else {
+      log.warn(
+        "could not encrypt the plaintext Microsoft token cache; using it as-is",
+      );
+    }
+    return plain;
+  }
+  return readSealedFile(layout, cachePath(layout));
 }
 
 function buildApp(layout: Layout, clientId: string): PublicClientApplication {
-  const file = cachePath(layout);
   return new PublicClientApplication({
     auth: { clientId, authority: AUTHORITY },
     cache: {
       cachePlugin: {
         beforeCacheAccess: async (ctx) => {
+          const data = await loadTokenCache(layout);
+          if (!data) return; // first run, or nothing readable
           try {
-            ctx.tokenCache.deserialize(fs.readFileSync(file, "utf-8"));
-          } catch {
-            /* first run */
+            ctx.tokenCache.deserialize(data);
+          } catch (err) {
+            // corrupt cache: carry on empty rather than fail the token call.
+            // NOT silent — this is what a surprise re-login looks like.
+            log.warn(`ignoring an unreadable Microsoft token cache: ${err}`);
           }
         },
         afterCacheAccess: async (ctx) => {
-          if (ctx.cacheHasChanged) {
-            fs.mkdirSync(layout.credentials, { recursive: true });
-            fs.writeFileSync(file, ctx.tokenCache.serialize());
-            if (process.platform !== "win32") fs.chmodSync(file, 0o600);
-          }
+          if (!ctx.cacheHasChanged) return;
+          await writeSealedFile(
+            layout,
+            cachePath(layout),
+            ctx.tokenCache.serialize(),
+          );
         },
       },
     },

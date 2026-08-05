@@ -20,6 +20,7 @@
 ## Codebase Architecture & Security Invariants
 
 - **Room / Broker Split**: The broker holds all credentials and handles network sync; the room is path-jailed and isolated.
+- **Secrets**: all secret storage goes through `src/secrets.ts` — one master key in the OS store (macOS Keychain / Windows DPAPI / `0600` file), every secret in an AES-256-GCM file it unlocks. Never add a native dependency for this (the `.mcpb` bundle must stay prebuild-free), never write a secret in plain text, never pass one in argv, and never replace a master key that exists but cannot be read. `ingest/src/secrets.mjs` is a read-only sync mirror of the same format; `test/secrets.test.ts` pins the two together and `test/secrets_os.test.ts` (opt-in, `MESSAGEOPERATOR_SECRET_IT=1`, run by CI on macOS + Windows) is the only test that touches a real credential store.
 - See `AI_CONTEXT.md` for room/broker split details.
 - See `README.md` for SQLite store and sync behavior details.
 

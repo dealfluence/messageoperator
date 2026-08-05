@@ -6,20 +6,22 @@ import { Broker, type BrokerOptions, sendOutcomeLines } from "../src/broker.js";
 import { storeGmailAppPassword } from "../src/creds.js";
 import { asViewFile, extractDocxMarkdown } from "../src/pack.js";
 import {
+  clearGmailPassword,
   queueDraftUpload,
   queueSend,
   sampleDocx,
   sampleEml,
+  seedGmailPassword,
   tmpHome,
 } from "./helpers.js";
 
-function makeBroker(
+async function makeBroker(
   opts: {
     dryRun?: boolean;
     detectProvider?: BrokerOptions["detectProvider"];
     draftUploaders?: BrokerOptions["draftUploaders"];
   } = {},
-): Broker {
+): Promise<Broker> {
   const home = tmpHome();
   const broker = new Broker(home, {
     mode: "boundary",
@@ -49,10 +51,7 @@ function makeBroker(
   );
   // authenticate the gmail account: only authenticated addresses count as
   // always-allowed recipients (m@outlook.com stays needs_login)
-  fs.writeFileSync(
-    path.join(broker.layout.credentials, "gmail_app_pw.a@gmail.com"),
-    "abcdabcdabcdabcd\n",
-  );
+  await seedGmailPassword(broker.layout, "a@gmail.com");
   // never start a REAL loopback flow (or open a browser!) from a test; the
   // tests that assert on flows override this again with a recorder
   broker.loginManager.ensureFlow = async () =>
@@ -129,7 +128,7 @@ describe("boundary broker", () => {
     }
   });
   it("reports LOGIN STARTED with the sign-in URL on push", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     broker.loginManager.ensureFlow = async () =>
       "http://localhost:9999/ms-signin";
     loginRequest(broker, { address: "m@outlook.com" });
@@ -145,7 +144,7 @@ describe("boundary broker", () => {
   it("reports LOGIN REJECTED when a first microsoft login has no client_id", async () => {
     // no client_id anywhere: config has no ms account, env is scrubbed by
     // beforeEach. The old code silently no-op'd; now the failure surfaces.
-    const broker = makeBroker();
+    const broker = await makeBroker();
     fs.writeFileSync(
       broker.layout.configPath,
       JSON.stringify({
@@ -169,7 +168,7 @@ describe("boundary broker", () => {
     // client_id only from the CLI arg or an EXISTING account, so this
     // first-account login registered nothing and opened no browser.
     process.env.MESSAGEOPERATOR_MS_CLIENT_ID = "env-cid";
-    const broker = makeBroker();
+    const broker = await makeBroker();
     // config with NO microsoft account at all, so the only client_id source
     // is the env var
     fs.writeFileSync(
@@ -199,7 +198,7 @@ describe("boundary broker", () => {
     broker.close();
   });
   it("bootstraps account trees and publishes status on a cycle", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     expect(broker.layout.accountAddresses()).toEqual([
       "a@gmail.com",
@@ -220,7 +219,7 @@ describe("boundary broker", () => {
   });
 
   it("processes a queued send on push and reports the outcome", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false }); // baseline
     queueSend(broker.layout, "a@gmail.com", sampleEml({ to: "a@gmail.com" }));
 
@@ -231,7 +230,7 @@ describe("boundary broker", () => {
   });
 
   it("refuses recipients that are configured but not authenticated", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     // m@outlook.com is in the config, but nobody has signed in to it — an
     // agent-registered address must not become an allowed recipient
@@ -243,7 +242,7 @@ describe("boundary broker", () => {
   });
 
   it("observes agent-created drafts and explains them to the audit", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const drafts = path.join(
       broker.layout.accounts,
@@ -262,7 +261,7 @@ describe("boundary broker", () => {
   });
 
   it("flags out-of-band room mutations as state_diff", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false }); // baseline manifest
     const inbox = path.join(
       broker.layout.accounts,
@@ -283,7 +282,7 @@ describe("boundary broker", () => {
   });
 
   it("folds mail-tag entries into the index exactly once", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const entry = {
       sha: "abcdef123456",
@@ -302,7 +301,7 @@ describe("boundary broker", () => {
   });
 
   it("folds untag request entries into the index exactly once", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     // First, tag it
     broker.index.addTag("abcdef123456", "urgent", "2026-07-06T10:00:00Z");
@@ -328,7 +327,7 @@ describe("boundary broker", () => {
   });
 
   it("replays tag and untag entries in timestamp order, so re-tagging wins", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const tag1 = {
       sha: "abcdef123456",
@@ -366,7 +365,7 @@ describe("boundary broker", () => {
   });
 
   it("handles mixed timestamp formats (Z vs +00:00) chronologically", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const tag1 = {
       sha: "abcdef123456",
@@ -397,7 +396,7 @@ describe("boundary broker", () => {
     // to vanish (with its sync) when the extension was reinstalled with
     // empty settings
     process.env.MESSAGEOPERATOR_GMAIL_ADDRESS = "settings-pane@gmail.com";
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     broker.close();
     delete process.env.MESSAGEOPERATOR_GMAIL_ADDRESS; // "reinstall": env gone
@@ -426,7 +425,7 @@ describe("boundary broker", () => {
   });
 
   it("throttles pulls by pull_interval_seconds", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     // interval 0 ⇒ every pull runs
     expect(await broker.pull()).toBe(true);
     expect(await broker.pull()).toBe(true);
@@ -440,7 +439,7 @@ describe("boundary broker", () => {
   });
 
   it("honors a `mail login` request by starting a sign-in flow", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     // patch the flow starter: a real one would build MSAL auth URLs (network)
     broker.loginManager.ensureFlow = async (_layout, acct) => {
@@ -463,7 +462,7 @@ describe("boundary broker", () => {
   });
 
   it("registers an account from a `mail account add` request and persists it", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     fs.writeFileSync(
       path.join(broker.layout.room, ".account-request.json"),
       JSON.stringify({ provider: "gmail", address: "Second@Gmail.com" }),
@@ -495,7 +494,7 @@ describe("boundary broker", () => {
   });
 
   it("gives an agent-added microsoft account the shared client_id and starts its flow", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: Array<{ address: string; client_id?: string }> = [];
     broker.loginManager.ensureFlow = async (_layout, acct) => {
       started.push({ address: acct.address, client_id: acct.client_id });
@@ -521,7 +520,7 @@ describe("boundary broker", () => {
   });
 
   it("rejects traversal-shaped addresses in account requests", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     for (const address of [
       "../../evil@x.com",
       "a/b@x.com",
@@ -551,7 +550,7 @@ describe("boundary broker", () => {
   });
 
   it("registers a client_id-less microsoft account as unconfigured, no popup", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     // config with no microsoft accounts at all
     fs.writeFileSync(
       broker.layout.configPath,
@@ -591,7 +590,7 @@ describe("boundary broker", () => {
   });
 
   it("processes several account requests from one tool call (JSONL)", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     broker.loginManager.ensureFlow = async (_layout, acct) => {
       started.push(acct.address);
@@ -617,7 +616,7 @@ describe("boundary broker", () => {
   });
 
   it("refuses a microsoft login for an address registered as gmail", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     broker.loginManager.ensureFlow = async (_layout, acct) => {
       started.push(acct.address);
@@ -638,7 +637,7 @@ describe("boundary broker", () => {
   });
 
   it("auto-registers an unknown address on `mail login` when a client_id is known", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     broker.loginManager.ensureFlow = async (_layout, acct) => {
       started.push(acct.address);
@@ -672,7 +671,7 @@ describe("boundary broker", () => {
   });
 
   it("starts a lazy login at pull time, once per process", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     broker.loginManager.ensureFlow = async (_layout, acct) => {
       started.push(acct.address);
@@ -685,7 +684,7 @@ describe("boundary broker", () => {
   });
 
   it("routes a gmail login request to the app-password wizard", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     broker.gmailSetup.ensureFlow = async (address) => {
       started.push(address);
@@ -708,7 +707,7 @@ describe("boundary broker", () => {
   });
 
   it("registers a brand-new gmail address from an explicit provider", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     const started: string[] = [];
     broker.gmailSetup.ensureFlow = async (address) => {
       started.push(address);
@@ -728,7 +727,7 @@ describe("boundary broker", () => {
   });
 
   it("detects the provider of a new custom-domain address via MX", async () => {
-    const broker = makeBroker({ detectProvider: async () => "gmail" });
+    const broker = await makeBroker({ detectProvider: async () => "gmail" });
     const started: string[] = [];
     broker.gmailSetup.ensureFlow = async (address) => {
       started.push(address);
@@ -746,7 +745,7 @@ describe("boundary broker", () => {
   });
 
   it("registers nothing when the provider cannot be determined", async () => {
-    const broker = makeBroker(); // detectProvider stub returns null
+    const broker = await makeBroker(); // detectProvider stub returns null
     const started: string[] = [];
     broker.gmailSetup.ensureFlow = async (address) => {
       started.push(address);
@@ -763,7 +762,9 @@ describe("boundary broker", () => {
   });
 
   it("reuses an existing microsoft client_id for a new microsoft address", async () => {
-    const broker = makeBroker({ detectProvider: async () => "microsoft" });
+    const broker = await makeBroker({
+      detectProvider: async () => "microsoft",
+    });
     const started: Array<[string, string | undefined]> = [];
     broker.loginManager.ensureFlow = async (_layout, acct) => {
       started.push([acct.address, acct.client_id]);
@@ -782,13 +783,10 @@ describe("boundary broker", () => {
   });
 
   it("lazily opens the gmail wizard once per process when no password is stored", async () => {
-    const broker = makeBroker();
-    // makeBroker() seeds an app password for a@gmail.com; this test is about
+    const broker = await makeBroker();
+    // await makeBroker() seeds an app password for a@gmail.com; this test is about
     // the no-password path, so remove it before pulling
-    fs.rmSync(
-      path.join(broker.layout.credentials, "gmail_app_pw.a@gmail.com"),
-      { force: true },
-    );
+    await clearGmailPassword(broker.layout, "a@gmail.com");
     const started: string[] = [];
     broker.gmailSetup.ensureFlow = async (address) => {
       started.push(address);
@@ -801,7 +799,7 @@ describe("boundary broker", () => {
   });
 
   it("does not open the gmail wizard when a password is already stored", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await storeGmailAppPassword(
       broker.layout,
       "a@gmail.com",
@@ -818,7 +816,7 @@ describe("boundary broker", () => {
   });
 
   it("publishes gmail wizard URLs in status auth_urls", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     broker.gmailSetup.pendingUrls = () => ({
       "a@gmail.com": "http://127.0.0.1:9999/setup/abc",
     });
@@ -836,7 +834,7 @@ describe("boundary broker", () => {
   });
 
   it("delivers for real when dry_run is off", async () => {
-    const broker = makeBroker({ dryRun: false });
+    const broker = await makeBroker({ dryRun: false });
     await broker.runCycle({ syncNetwork: false });
     queueSend(
       broker.layout,
@@ -876,7 +874,7 @@ describe("pack requests", () => {
   }
 
   it("rebases md edits into the docx as tracked changes and refreshes the view", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const { mdRel, docxPath, mdPath } = await seedDocxView(broker, [
       "The fee is 100 euros.",
@@ -914,7 +912,7 @@ describe("pack requests", () => {
   });
 
   it("rejects an unchanged view as no_changes and leaves the docx alone", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const { mdRel, docxPath } = await seedDocxView(broker, ["Original."]);
     const before = fs.readFileSync(docxPath);
@@ -927,7 +925,7 @@ describe("pack requests", () => {
   });
 
   it("rejects a view that is not this document; nothing is saved", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     // @adeu/core 1.30.0 resolves repeated and even identical targets by the
     // position the differ recorded, so the ambiguity rejection this used to
@@ -952,7 +950,7 @@ describe("pack requests", () => {
   });
 
   it("refuses pdf views and paths outside attachments/", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     requestPack(broker, "attachments/abcdef123456/report.pdf.md");
     requestPack(broker, "accounts/a@gmail.com/mail/INBOX/cur/x.docx.md");
@@ -967,7 +965,7 @@ describe("pack requests", () => {
   });
 
   it("rejects a view whose files are missing", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     // md exists but the sibling docx does not
     const dir = path.join(broker.layout.attachments, "abcdef123456");
@@ -985,7 +983,7 @@ describe("pack requests", () => {
   });
 
   it("rejects a corrupt docx without killing the cycle", async () => {
-    const broker = makeBroker();
+    const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
     const dir = path.join(broker.layout.attachments, "abcdef123456");
     fs.mkdirSync(dir, { recursive: true });
@@ -1214,7 +1212,7 @@ describe("sendOutcomeLines", () => {
    * is completely silent.
    */
   it("reports a draft upload in the boundary push (QA 2026-07-24 BUG-2)", async () => {
-    const broker = makeBroker({
+    const broker = await makeBroker({
       dryRun: false,
       draftUploaders: {
         gmail: async () => "<uploaded@gmail.com>",

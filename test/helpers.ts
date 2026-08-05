@@ -8,6 +8,7 @@ import { Ledger } from "../src/ledger.js";
 import { Index } from "../src/state.js";
 import type { Config } from "../src/config.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { deleteSecret, gmailSecretName, setSecret } from "../src/secrets.js";
 
 export function tmpHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "messageoperator-test-"));
@@ -33,6 +34,40 @@ export function makeConfig(partial: Partial<Config> = {}): Config {
 
 export function writeConfigFile(layout: Layout, cfg: Config): void {
   fs.writeFileSync(layout.configPath, JSON.stringify(cfg, null, 2));
+}
+
+/**
+ * Authenticate a Gmail account through the real storage path — the encrypted
+ * volume, with a master key in whatever backend the suite pinned
+ * (test/setup.ts pins files, so this never touches a host keychain).
+ */
+export async function seedGmailPassword(
+  layout: Layout,
+  address: string,
+  password = "abcdabcdabcdabcd",
+): Promise<void> {
+  layout.ensureBroker();
+  await setSecret(layout, gmailSecretName(address), password);
+}
+
+/** The reverse: an account that is configured but has no password. */
+export async function clearGmailPassword(
+  layout: Layout,
+  address: string,
+): Promise<void> {
+  await deleteSecret(layout, gmailSecretName(address));
+}
+
+/** A password left in the open by a pre-volume build, for migration tests. */
+export function seedLegacyGmailPassword(
+  layout: Layout,
+  address: string,
+  password = "abcdabcdabcdabcd",
+): string {
+  fs.mkdirSync(layout.credentials, { recursive: true });
+  const file = path.join(layout.credentials, gmailSecretName(address));
+  fs.writeFileSync(file, password + "\n");
+  return file;
 }
 
 export function makeIndex(layout: Layout): Index {

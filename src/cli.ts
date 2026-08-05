@@ -77,8 +77,9 @@ async function login(addressArg?: string): Promise<number> {
     const inbox = await msgraph.verifyMailbox(token);
     process.stdout.write(
       `logged in as ${acct.address}; mailbox verified ` +
-        `(INBOX: ${inbox.totalItemCount ?? "?"} messages); token cached under ` +
-        `${layout.credentials} and refreshed silently from now on\n`,
+        `(INBOX: ${inbox.totalItemCount ?? "?"} messages); token cached ` +
+        `encrypted under ${layout.credentials} and refreshed silently from ` +
+        "now on\n",
     );
     return 0;
   } catch (err) {
@@ -162,9 +163,10 @@ async function setGmailPassword(addressArg?: string): Promise<number> {
       `warning: could not reach Gmail to verify (${err}); storing anyway\n`,
     );
   }
-  storeGmailAppPassword(layout, address, password);
+  await storeGmailAppPassword(layout, address, password);
+  const { secretStorageDescription } = await import("./secrets.js");
   process.stdout.write(
-    `stored Gmail app password for ${address} under ${layout.credentials}\n`,
+    `stored Gmail app password for ${address} in ${secretStorageDescription()}\n`,
   );
   return 0;
 }

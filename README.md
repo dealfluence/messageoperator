@@ -81,8 +81,47 @@ in-chat with `mail login <address>`. State lives under `~/messageoperator/`.
 
 Settings-pane values merge in (and win for `dry_run`). Extra Gmail accounts
 store their app passwords per address:
-`node dist/cli.js set-gmail-password --account second@gmail.com`
-(writes `broker/credentials/gmail_app_pw.<address>`).
+`node dist/cli.js set-gmail-password --account second@gmail.com`.
+
+## Secrets at rest
+
+One master key in the OS credential store; everything else in AES-256-GCM
+files it unlocks. No secret is kept in plain text, and no native module is used
+to manage them — the bundle stays prebuild-free (see `src/secrets.ts`).
+
+| file under `broker/credentials/` | holds                                   |
+| -------------------------------- | --------------------------------------- |
+| `secrets.json`                   | Gmail app passwords (one flat JSON map) |
+| `msal_token_cache.enc`           | the Microsoft/MSAL token cache          |
+
+Both use the same envelope: `{ "iv", "authTag", "data" }`, hex, AES-256-GCM
+with a fresh 96-bit IV per write and the file's own basename authenticated as
+additional data. Where the 256-bit master key lives:
+
+| platform     | master key                                                      |
+| ------------ | --------------------------------------------------------------- |
+| macOS        | login Keychain, service `messageoperator`, account `master-key` |
+| Windows      | DPAPI (`CurrentUser`) blob at `master_key.dpapi`                |
+| Linux/Docker | `master_key`, mode `0600`                                       |
+
+The key never appears in a process listing: on macOS the `add-generic-password`
+command is fed to `security -i` on **stdin**, and on Windows the payload is
+piped to PowerShell's `[System.Security.Cryptography.ProtectedData]`. A key is
+only ever created when none exists — if one is present but unreadable (locked
+keychain, denied ACL), the app reads nothing and **writes nothing** rather than
+replacing it, because that key is the only thing standing between a restart and
+re-authenticating every mailbox.
+
+There is deliberately no Linux Secret Service client: every pure-JS D-Bus
+library needs a native addon for abstract sockets, which this bundle cannot
+build, and containers have no keyring anyway.
+
+Secrets left in the open by an earlier version — a plaintext file, a
+SecureString clixml, a per-address keychain item or DPAPI blob — are moved into
+the volume the first time they are read, and the old copy is deleted. Set
+`MESSAGEOPERATOR_SECRET_BACKEND=file` to force the file backend (containers,
+CI); the test suite pins it so no test can touch a real keychain, and
+`MESSAGEOPERATOR_SECRET_IT=1` runs the one suite that deliberately does.
 
 ## CLI (dev/terminal conveniences)
 

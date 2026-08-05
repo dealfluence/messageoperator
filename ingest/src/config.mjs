@@ -1,8 +1,9 @@
 /**
  * Where the ingest store lives and how it finds accounts + Gmail credentials.
- * It REUSES the existing Message Operator credential storage
- * (broker/credentials + broker/config.json) rather than inventing new secret
- * handling — nothing sensitive is copied, moved, printed, or committed.
+ * It REUSES the existing Message Operator credential storage (the OS keychain
+ * or broker/credentials, via ./secrets.mjs, plus broker/config.json) rather
+ * than inventing new secret handling — and it only ever reads: nothing
+ * sensitive is copied, moved, printed, or committed.
  *
  *   MESSAGEOPERATOR_HOME        → existing state home (accounts + credentials)
  *   MESSAGEOPERATOR_INGEST_HOME → ingest store/blobs/logs
@@ -14,7 +15,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+
+import { gmailSecretName, readSecretSync } from "./secrets.mjs";
 
 function envVal(suffix) {
   return (
@@ -70,57 +72,22 @@ export function loadAccounts() {
   }
 }
 
-/** Gmail app password for an address: env (bound) first, then the creds file. */
+/** <state home>/broker/credentials — where the broker keeps its secrets. */
+export function credentialsDir() {
+  return path.join(stateHome(), "broker", "credentials");
+}
+
+/**
+ * Gmail app password for an address: the bound env var first, then whatever
+ * the broker stored (OS keychain, DPAPI, or file — see ingest/src/secrets.mjs).
+ * Read-only: ingest never writes or migrates a secret.
+ */
 export function gmailPassword(address) {
   const envAddr = (envVal("GMAIL_ADDRESS") || "").toLowerCase();
   const envPw = envVal("GMAIL_APP_PW");
   if (envPw && envAddr && envAddr === address.toLowerCase()) {
     return envPw.replace(/\s+/g, "");
   }
-
-  const platform = os.platform();
-  if (platform === "darwin") {
-    try {
-      const stdout = execFileSync(
-        "security",
-        ["find-generic-password", "-a", address, "-s", "messageoperator", "-w"],
-        { encoding: "utf-8" },
-      );
-      return stdout.trim().replace(/\s+/g, "");
-    } catch {
-      /* fallback to legacy file */
-    }
-  } else if (platform === "win32") {
-    const xmlFile = path.join(
-      stateHome(),
-      "broker",
-      "credentials",
-      `gmail_app_pw.${address.toLowerCase()}.xml`,
-    );
-    if (fs.existsSync(xmlFile)) {
-      try {
-        const script = `$cred = New-Object System.Management.Automation.PSCredential 'dummy', (Import-Clixml -Path '${xmlFile.replace(/'/g, "''")}'); $cred.GetNetworkCredential().Password`;
-        const stdout = execFileSync(
-          "powershell.exe",
-          ["-NoProfile", "-Command", script],
-          { encoding: "utf-8" },
-        );
-        return stdout.trim().replace(/\s+/g, "");
-      } catch {
-        /* fallback to legacy file */
-      }
-    }
-  }
-
-  const file = path.join(
-    stateHome(),
-    "broker",
-    "credentials",
-    `gmail_app_pw.${address.toLowerCase()}`,
-  );
-  try {
-    return fs.readFileSync(file, "utf-8").replace(/\s+/g, "");
-  } catch {
-    return null;
-  }
+  const stored = readSecretSync(credentialsDir(), gmailSecretName(address));
+  return stored ? stored.replace(/\s+/g, "") : null;
 }
