@@ -180,6 +180,8 @@ interface BrokerStatus {
   dry_run?: boolean;
   pending_intents?: number;
   auth?: Record<string, string>;
+  /** advisory sentences from the broker (e.g. restart-required) */
+  notices?: string[];
 }
 
 /** Read room/.broker-status.json; absent or unparsable → null. */
@@ -201,6 +203,9 @@ export function alertChips(status: BrokerStatus | null): Chip[] {
       kind: "dry_run",
       text: "Dry run is on — sends are simulated",
     });
+  }
+  for (const notice of status.notices ?? []) {
+    chips.push({ kind: "notice", text: notice });
   }
   for (const [address, state] of Object.entries(status.auth ?? {})) {
     if (state === "ok" || state === "ok_unverified") continue;

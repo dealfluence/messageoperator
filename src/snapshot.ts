@@ -37,6 +37,10 @@ export interface StatusExtras {
   ownAddresses?: string[];
   /** address -> live sign-in URL while a loopback login flow is pending */
   authUrls?: Record<string, string>;
+  /** advisory sentences for the agent/user (e.g. restart-required) */
+  notices?: string[];
+  /** address -> effective Microsoft app (client) id, masked, with source */
+  msClientIds?: Record<string, { suffix: string; source: string }>;
 }
 
 /**
@@ -70,6 +74,10 @@ export function writeStatus(
     pull_interval_seconds: cfg.pull_interval_seconds,
     auth: extras.auth,
     auth_urls: extras.authUrls ?? {},
+    // e.g. "extension settings changed after this server started — restart";
+    // mail status prints each one, so the agent can relay it to the user
+    notices: extras.notices ?? [],
+    ms_client_ids: extras.msClientIds ?? {},
   };
   fs.mkdirSync(layout.room, { recursive: true });
   const tmp = path.join(layout.room, STATUS_FILE + ".tmp");

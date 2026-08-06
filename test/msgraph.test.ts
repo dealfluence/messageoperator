@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   authState,
+  classifyAuthError,
   fetchBody,
   forgetAccount,
   GraphHTTPError,
@@ -565,5 +566,37 @@ describe("MSAL token cache at rest", () => {
     expect(rest).toContain("rt-secret-other@outlook.com");
     // forgetting an address with nothing cached reports that honestly
     expect(await forgetAccount(layout, ACCT)).toBe(false);
+  });
+});
+
+describe("classifyAuthError", () => {
+  it("stays quiet for errors unrelated to the app id", () => {
+    expect(classifyAuthError(new Error("ETIMEDOUT"), "cid")).toBeNull();
+    expect(
+      classifyAuthError(new Error("AADSTS50076: MFA required"), "cid"),
+    ).toBeNull();
+  });
+
+  it("maps an unknown-application rejection to an actionable, host-hedged hint", () => {
+    const hint = classifyAuthError(
+      new Error(
+        "ServerError: invalid_client - AADSTS700016: Application with " +
+          "identifier 'cid-old' was not found in the directory",
+      ),
+      "cid-old",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toContain("…id-old"); // names the id in use, masked
+    expect(hint).toMatch(/restart the\s+MCP server/i);
+    // never assumes the host: Claude Desktop is an example, not a given
+    expect(hint).toContain("in Claude Desktop");
+    expect(hint).toContain("under another host");
+    expect(hint).toContain("Azure app registration"); // the typo case too
+  });
+
+  it("recognizes unauthorized_client as an app-id problem", () => {
+    expect(
+      classifyAuthError("unauthorized_client: not consented", "cid"),
+    ).not.toBeNull();
   });
 });

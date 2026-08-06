@@ -1591,6 +1591,10 @@ def cmd_status(args):
         print(f"broker: RUNNING (last cycle {age_txt})")
     else:
         print(f"broker: STALE / likely stopped (last cycle {age_txt})")
+    # broker advisories (e.g. "extension settings changed after this server
+    # started — restart required"): relay them to the user verbatim
+    for notice in status.get("notices") or []:
+        print(f"NOTICE: {notice}")
     print(
         f"dry_run: {json.dumps(status.get('dry_run'))}"
         + (
@@ -1643,6 +1647,15 @@ def cmd_status(args):
                 else f"  (run `mail login {account}` — a guided page opens in the user's browser to create and store a Gmail app password; never ask for the password in chat)"
             )
         print(f"auth {account}: {state}{hint}")
+    # effective Microsoft app (client) id per account, masked: lets a user
+    # who just changed the id in the extension settings verify it landed
+    ms_ids = status.get("ms_client_ids") or {}
+    for account in sorted(ms_ids):
+        entry = ms_ids.get(account) or {}
+        source = str(entry.get("source", "")).replace("_", " ") or "unknown"
+        print(
+            f"microsoft app id {account}: {entry.get('suffix', '?')} (from {source})"
+        )
     # backfill progress straight from the store: a fresh mailbox keeps
     # growing between commands until the history walk reports caught up
     conn = open_store()

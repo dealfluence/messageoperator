@@ -20,6 +20,7 @@ async function makeBroker(
     dryRun?: boolean;
     detectProvider?: BrokerOptions["detectProvider"];
     draftUploaders?: BrokerOptions["draftUploaders"];
+    hostSettingsProbe?: BrokerOptions["hostSettingsProbe"];
   } = {},
 ): Promise<Broker> {
   const home = tmpHome();
@@ -34,6 +35,16 @@ async function makeBroker(
     },
     ...(opts.draftUploaders ? { draftUploaders: opts.draftUploaders } : {}),
     detectProvider: opts.detectProvider ?? (async () => null),
+    // default: a host with no settings store — tests never probe the real
+    // Claude Desktop directories of the machine they run on
+    hostSettingsProbe:
+      opts.hostSettingsProbe ??
+      (() => ({
+        file: null,
+        changedSinceSpawn: false,
+        staleClientId: false,
+        notices: [],
+      })),
   });
   // default stubs: no test ever starts a real loopback listener or browser
   broker.loginManager.ensureFlow = async () => "http://localhost:9999/ms-fake";
@@ -1232,6 +1243,108 @@ describe("sendOutcomeLines", () => {
       "precondition: the upload actually ran",
     ).toContain("draft_uploaded");
     expect(lines.join("\n")).toMatch(/DRAFT UPLOADED/i);
+    broker.close();
+  });
+});
+
+describe("host settings staleness", () => {
+  // env is injected at spawn: a settings-pane edit only reaches the server
+  // after a host restart. These pin the fail-fast surfaces for that gap.
+  const key = "MESSAGEOPERATOR_MS_CLIENT_ID";
+  let backup: string | undefined;
+  beforeEach(() => {
+    backup = process.env[key];
+    delete process.env[key];
+  });
+  afterEach(() => {
+    if (backup === undefined) delete process.env[key];
+    else process.env[key] = backup;
+  });
+
+  const staleProbe = () => ({
+    file: "claude-extensions-settings.json",
+    changedSinceSpawn: true,
+    paneClientId: "cid-new",
+    staleClientId: true,
+    notices: [
+      "The extension settings now set Microsoft app (client) ID …id-new, " +
+        "but this server is still running with …id-old. Restart the MCP server.",
+    ],
+  });
+
+  it("publishes restart notices and the effective client ids in status", async () => {
+    const broker = await makeBroker({ hostSettingsProbe: staleProbe });
+    await broker.runCycle({ syncNetwork: false });
+    const status = JSON.parse(
+      fs.readFileSync(
+        path.join(broker.layout.room, ".broker-status.json"),
+        "utf-8",
+      ),
+    );
+    expect(status.notices).toHaveLength(1);
+    expect(status.notices[0]).toContain("Restart the MCP server");
+    // the id actually in use is visible (masked) so a user who just changed
+    // the pane can verify whether their edit landed
+    expect(status.ms_client_ids["m@outlook.com"]).toEqual({
+      suffix: "…cid",
+      source: "config_file",
+    });
+    broker.close();
+  });
+
+  it("publishes no notices when the host leaves no settings store", async () => {
+    const broker = await makeBroker();
+    await broker.runCycle({ syncNetwork: false });
+    const status = JSON.parse(
+      fs.readFileSync(
+        path.join(broker.layout.room, ".broker-status.json"),
+        "utf-8",
+      ),
+    );
+    expect(status.notices).toEqual([]);
+    broker.close();
+  });
+
+  it("refuses to open a microsoft sign-in against a client id the pane already replaced", async () => {
+    const broker = await makeBroker({ hostSettingsProbe: staleProbe });
+    const flows: string[] = [];
+    broker.loginManager.ensureFlow = async (_l, acct) => {
+      flows.push(acct.address);
+      return "http://localhost:9999/ms-fake";
+    };
+    loginRequest(broker, { address: "m@outlook.com" });
+    await broker.runCycle({ syncNetwork: false });
+
+    expect(flows).toEqual([]); // no browser flow against the stale id
+    const rejected = broker.ledger
+      .readAll()
+      .filter((r) => r.op === "login_rejected");
+    expect(rejected).toHaveLength(1);
+    const reason = (rejected[0]?.details as { reason?: string }).reason ?? "";
+    expect(reason).toContain("…id-new");
+    expect(reason).toContain("…cid"); // the id this server still runs with
+    expect(reason).toContain("restart the MCP server");
+    expect(reason).toContain("under another host"); // never assumes Claude Desktop
+    broker.close();
+  });
+
+  it("an explicit --client-id overrides the stale-settings guard", async () => {
+    const broker = await makeBroker({ hostSettingsProbe: staleProbe });
+    const flows: string[] = [];
+    broker.loginManager.ensureFlow = async (_l, acct) => {
+      flows.push(acct.address);
+      return "http://localhost:9999/ms-fake";
+    };
+    loginRequest(broker, { address: "m@outlook.com", client_id: "cid-x" });
+    await broker.runCycle({ syncNetwork: false });
+
+    expect(flows).toEqual(["m@outlook.com"]);
+    expect(
+      broker.ledger.readAll().filter((r) => r.op === "login_rejected"),
+    ).toEqual([]);
+    expect(
+      broker.ledger.readAll().filter((r) => r.op === "login_started"),
+    ).toHaveLength(1);
     broker.close();
   });
 });

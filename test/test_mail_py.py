@@ -1734,6 +1734,55 @@ class DisconnectedMailboxTests(MailCliTestBase):
         self.assertNotIn("disconnected (removed", proc.stdout)
 
 
+class StatusNoticeTests(MailCliTestBase):
+    """
+    The broker publishes advisory notices (e.g. "extension settings changed
+    after this server started - restart required") and the effective
+    Microsoft app id per account. `mail status` must relay both: env-injected
+    settings only change on a host restart, and without these lines a stale
+    client id is invisible to the user who just changed it.
+    """
+
+    def _write_status(self, extra):
+        import json
+
+        body = {"ts": "2026-07-28T10:00:00Z", "dry_run": True}
+        body.update(extra)
+        (self.room / ".broker-status.json").write_text(
+            json.dumps(body), encoding="utf-8"
+        )
+
+    def test_status_relays_notices_and_effective_app_ids(self):
+        self._write_status(
+            {
+                "connected_accounts": ["m@outlook.com"],
+                "auth": {"m@outlook.com": "ok"},
+                "notices": [
+                    "The extension settings changed after this server started. "
+                    "Restart the MCP server to apply them."
+                ],
+                "ms_client_ids": {
+                    "m@outlook.com": {
+                        "suffix": "...id-old",
+                        "source": "extension_settings",
+                    }
+                },
+            }
+        )
+        proc = self.run_mail("status", expect_code=0)
+        self.assertIn("NOTICE: The extension settings changed", proc.stdout)
+        self.assertIn("Restart the MCP server", proc.stdout)
+        self.assertIn("microsoft app id m@outlook.com: ...id-old", proc.stdout)
+        self.assertIn("(from extension settings)", proc.stdout)
+
+    def test_status_stays_quiet_without_notices_or_ids(self):
+        # older brokers publish neither field; nothing may be invented
+        self._write_status({"auth": {"m@outlook.com": "ok"}})
+        proc = self.run_mail("status", expect_code=0)
+        self.assertNotIn("NOTICE:", proc.stdout)
+        self.assertNotIn("microsoft app id", proc.stdout)
+
+
 class TagVerbTests(MailCliTestBase):
     """`mail tag`, `mail untag`, and `mail tags` handle message tagging state.
     Tags must be toggleable (tag -> untag -> tag) without tombstoning the tag

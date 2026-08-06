@@ -32,7 +32,7 @@ import {
 } from "@azure/msal-node";
 
 import type { AccountConfig, Config } from "./config.js";
-import { accountsFor } from "./config.js";
+import { accountsFor, maskClientId } from "./config.js";
 import type { Layout } from "./layout.js";
 import type { Index } from "./state.js";
 import type { Ledger } from "./ledger.js";
@@ -248,6 +248,33 @@ export async function authState(
   }
 }
 
+/**
+ * AAD error signatures meaning the app (client) id itself was rejected:
+ * AADSTS700016 = application not found in the directory (deleted, typo'd,
+ * or a stale id from an extension-settings edit the server has not received
+ * yet — env is injected at spawn).
+ */
+const CLIENT_ID_ERROR_RE = /AADSTS700016|invalid_client|unauthorized_client/i;
+
+/**
+ * An actionable sentence when Microsoft rejected the app (client) id, else
+ * null. Never assumes which MCP host runs this server — Claude Desktop is
+ * named only as the common case, with a generic alternative.
+ */
+export function classifyAuthError(
+  err: unknown,
+  clientId: string | undefined,
+): string | null {
+  if (!CLIENT_ID_ERROR_RE.test(String(err))) return null;
+  return (
+    `Microsoft rejected the app (client) ID in use (${maskClientId(clientId)}). ` +
+    "If the ID was recently changed in the extension settings, restart the " +
+    "MCP server so the new value is picked up — in Claude Desktop, fully " +
+    "quit and reopen the app; under another host, restart that host's MCP " +
+    "server. Otherwise check the Azure app registration."
+  );
+}
+
 /** Silent-only token acquisition; null when a human is needed. */
 export async function acquireTokenSilentFor(
   layout: Layout,
@@ -261,8 +288,10 @@ export async function acquireTokenSilentFor(
     const result = await app.acquireTokenSilent({ account, scopes: SCOPES });
     return result?.accessToken ?? null;
   } catch (err) {
+    const hint = classifyAuthError(err, acct.client_id);
     log.warn(
-      `microsoft: silent token refresh for ${acct.address} failed: ${err}`,
+      `microsoft: silent token refresh for ${acct.address} failed: ${err}` +
+        (hint ? ` — ${hint}` : ""),
     );
     return null;
   }
@@ -442,8 +471,18 @@ export class LoginManager {
           finish("ok");
           log.info(`microsoft: sign-in completed for ${address}`);
         } catch (err) {
-          respond(res, `Sign-in failed: ${err}. Run \`mail login\` to retry.`);
+          const hint = classifyAuthError(err, acct.client_id);
+          respond(
+            res,
+            `Sign-in failed: ${err}. ` + (hint ?? "Run `mail login` to retry."),
+          );
           finish(`failed: ${err}`);
+          // without this line a failed token exchange was visible only in
+          // the browser tab; the broker log is where users go looking
+          log.error(
+            `microsoft: sign-in for ${address} failed: ${err}` +
+              (hint ? ` — ${hint}` : ""),
+          );
         }
       })();
     });

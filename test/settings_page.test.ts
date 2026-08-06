@@ -121,6 +121,25 @@ describe("settings page flow", () => {
     expect(bad.status).toBe(404);
   });
 
+  it("renders broker notices as persistent banners on every GET", async () => {
+    const { url } = await startFlow({
+      state: () => ({
+        ...makeState(),
+        notices: [
+          "The extension settings now set Microsoft app (client) ID …id-new — restart the MCP server to apply it.",
+        ],
+      }),
+    });
+    const page = await (await fetch(url)).text();
+    expect(page).toContain("restart the MCP server");
+    expect(page).toContain("…id-new");
+    // and an empty/absent notices list renders no banner scaffolding
+    const { url: plain } = await startFlow();
+    expect(await (await fetch(plain)).text()).not.toContain(
+      "restart the MCP server",
+    );
+  });
+
   it("saving safety settings calls the persistence hook with parsed values", async () => {
     const saved: any[] = [];
     const { url } = await startFlow({ onSaveSafety: (v) => saved.push(v) });

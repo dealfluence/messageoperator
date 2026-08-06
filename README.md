@@ -1,12 +1,13 @@
 # Message Operator : email as a small computer
 
-The TypeScript Message Operator server, targeting
-**macOS + Claude Desktop** and packaged
-as an **MCPB bundle** (`.mcpb`, one-click install). The architecture is a
-filesystem contract, not a language artifact: the room/broker split, path
-jail, Maildir layout, boundary pull/push at tool-call edges, sha-validated
-send intents, JSONL ledger, and manifest diff audit are unchanged from the
-original POC.
+The TypeScript Message Operator server, served as an **MCPB bundle** (`.mcpb`, one-click install).
+
+The architecture is a filesystem with Maildir layout and programmable command line tools.
+Message Operator exploits the fact that LLMs are highly trained to work with a command line bash interface.
+And thus we make everything look to it like 1990s unix.
+
+The system can handle multiple email accounts from Google and Microsoft. This is not a sandbox but a workspace.
+It is open to the host system and can manipulate data in there also.
 
 ## Development (any platform)
 

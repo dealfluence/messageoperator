@@ -35,6 +35,12 @@ export interface SettingsState {
   dry_run: boolean;
   dry_run_source: string;
   allowed_recipient_domains: string[];
+  /**
+   * Persistent advisory banners (e.g. "extension settings changed after
+   * this server started — restart required"), as opposed to the transient
+   * post-action notice. Optional: older callers render fine without it.
+   */
+  notices?: string[];
 }
 
 export interface SettingsPageOptions {
@@ -190,6 +196,12 @@ function sourceNote(source: string): string {
 }
 
 function renderPage(state: SettingsState, notice: string | null): string {
+  const warningBanners = (state.notices ?? [])
+    .map(
+      (n) =>
+        `<div style="background:#fdf3e3;border:1px solid #ebd9ac;border-radius:10px;padding:.7rem .9rem;margin-bottom:1rem;font-size:.9rem;color:#6b4e0e;">${escapeHtml(n)}</div>`,
+    )
+    .join("");
   const accountRows = state.accounts.length
     ? state.accounts
         .map(
@@ -218,7 +230,7 @@ function renderPage(state: SettingsState, notice: string | null): string {
 
   return pageChrome(
     "Message Operator settings",
-    `${notice ? `<div class="trust" style="margin-bottom:1rem;">${escapeHtml(notice)}</div>` : ""}
+    `${warningBanners}${notice ? `<div class="trust" style="margin-bottom:1rem;">${escapeHtml(notice)}</div>` : ""}
   <div class="card">
     <h1>Message Operator settings</h1>
     <p class="note">Claude can open this page but cannot click anything here — only you can.

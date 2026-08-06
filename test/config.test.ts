@@ -103,6 +103,40 @@ describe("config", () => {
     expect(findAccount(cfg, "m@outlook.com")?.client_id).toBe("shared-cid");
   });
 
+  it("lets a changed extension-pane client_id override a stale persisted one", () => {
+    // Regression: the broker persists the pane-provided client_id into
+    // broker/config.json on first sight. When the user later CHANGES the
+    // Client ID in the extension settings, the host restarts the server
+    // with the new env value — which must win over the stale file entry,
+    // exactly like dry_run does ("the extension settings pane is the
+    // primary UI").
+    const p = configPath();
+    fs.writeFileSync(
+      p,
+      JSON.stringify({
+        accounts: [
+          {
+            provider: "microsoft",
+            address: "m@outlook.com",
+            client_id: "cid-old",
+          },
+        ],
+      }),
+    );
+    // pane provides only the client id (shared-registration form)
+    const shared = loadConfig(p, { MESSAGEOPERATOR_MS_CLIENT_ID: "cid-new" });
+    expect(findAccount(shared, "m@outlook.com")?.client_id).toBe("cid-new");
+    // pane provides the address + client id pair
+    const paired = loadConfig(p, {
+      MESSAGEOPERATOR_MS_ADDRESS: "m@outlook.com",
+      MESSAGEOPERATOR_MS_CLIENT_ID: "cid-new",
+    });
+    expect(findAccount(paired, "m@outlook.com")?.client_id).toBe("cid-new");
+    // a cleared pane keeps the persisted value (accounts must not lose auth)
+    const cleared = loadConfig(p, {});
+    expect(findAccount(cleared, "m@outlook.com")?.client_id).toBe("cid-old");
+  });
+
   it("lets env dry_run override the file (extension settings win)", () => {
     const p = configPath();
     fs.writeFileSync(p, JSON.stringify({ dry_run: true }));

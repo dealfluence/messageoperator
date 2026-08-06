@@ -8,8 +8,9 @@
  *    (MESSAGEOPERATOR_GMAIL_ADDRESS, MESSAGEOPERATOR_MS_ADDRESS, MESSAGEOPERATOR_MS_CLIENT_ID,
  *    MESSAGEOPERATOR_DRY_RUN, MESSAGEOPERATOR_ALLOWED_RECIPIENT_DOMAINS). Env-declared
  *    accounts are appended if the file does not already list them, and
- *    env dry_run wins: the extension settings pane is the primary UI on
- *    the macOS target.
+ *    env dry_run and MS client_id win while set: the extension settings
+ *    pane is the primary UI on the macOS target. The file keeps the last
+ *    persisted values so accounts survive a cleared pane or a reinstall.
  */
 
 import fs from "node:fs";
@@ -151,15 +152,18 @@ function mergeEnv(cfg: Config, env: NodeJS.ProcessEnv): Config {
         address: msAddr,
         client_id: msClient || undefined,
       });
-    } else if (!existing.client_id && msClient) {
+    } else if (msClient) {
+      // the extension pane is authoritative while set: a client_id edited
+      // there must replace the one persisted in config.json (which is only
+      // a snapshot so accounts survive a cleared pane / reinstall)
       existing.client_id = msClient;
     }
   } else if (msClient) {
-    // client_id set without its own address: share it with file-configured
-    // microsoft accounts that lack one (one app registration serves all)
+    // client_id set without its own address: one app registration serves
+    // all microsoft accounts, so the pane value applies to every one —
+    // including accounts persisted with a now-stale client_id
     for (const acct of cfg.accounts) {
-      if (acct.provider === "microsoft" && !acct.client_id)
-        acct.client_id = msClient;
+      if (acct.provider === "microsoft") acct.client_id = msClient;
     }
   }
   const dryRun = envBool(env, "MESSAGEOPERATOR_DRY_RUN");
@@ -371,6 +375,45 @@ export function persistAccount(
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
   fs.renameSync(tmp, configPath);
   return true;
+}
+
+/**
+ * A client id reduced to a recognizable suffix for logs, status, and
+ * notices. An Azure app (client) id is not a secret, but full ids make
+ * every message unreadable; six characters are enough to tell two apart.
+ */
+export function maskClientId(id: string | undefined): string {
+  const value = (id ?? "").trim();
+  if (!value) return "(not set)";
+  return "…" + value.slice(-6);
+}
+
+/**
+ * address -> the Microsoft app (client) id actually in effect (masked) and
+ * which surface supplied it. Published in the status file so a user who just
+ * changed the id in the extension settings can verify the change landed —
+ * env is injected at spawn, so a pane edit needs a host restart to arrive.
+ */
+export function msClientIdSummary(
+  cfg: Config,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<
+  string,
+  { suffix: string; source: "extension_settings" | "config_file" }
+> {
+  const fromEnv = cleanEnvValue(env, "MESSAGEOPERATOR_MS_CLIENT_ID");
+  const out: Record<
+    string,
+    { suffix: string; source: "extension_settings" | "config_file" }
+  > = {};
+  for (const acct of accountsFor(cfg, "microsoft")) {
+    if (!acct.client_id) continue;
+    out[acct.address] = {
+      suffix: maskClientId(acct.client_id),
+      source: fromEnv === acct.client_id ? "extension_settings" : "config_file",
+    };
+  }
+  return out;
 }
 
 /**

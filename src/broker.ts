@@ -32,10 +32,17 @@ import {
   dryRunSource,
   isValidAccountAddress,
   loadConfig,
+  maskClientId,
+  msClientIdSummary,
   persistAccount,
   removeAccountFromFile,
   saveSettingsPage,
 } from "./config.js";
+import {
+  type HostSettingsProbe,
+  probeHostSettings,
+  recordEnvSnapshot,
+} from "./host_settings.js";
 import {
   gmailAppPassword,
   storeGmailAppPassword,
@@ -268,6 +275,8 @@ export interface BrokerOptions {
   detectProvider?: typeof detectProvider;
   folderOps?: FolderOps;
   bodyFetchers?: BodyFetchers;
+  /** test seam for the host settings staleness probe */
+  hostSettingsProbe?: () => HostSettingsProbe;
 }
 
 export class Broker {
@@ -281,6 +290,8 @@ export class Broker {
   private readonly lock = new CycleLock();
   private lastNetworkSync: string | null = null;
   private lastPullMonotonic: number | null = null;
+  private hostProbe: HostSettingsProbe | null = null;
+  private lastLoggedNotices = "";
   private readonly gmailConn = new gmail.ConnectionCache();
   private readonly hashCache: snapshot.HashCache;
   private readonly opts: BrokerOptions;
@@ -399,10 +410,41 @@ export class Broker {
     }
   }
 
+  /**
+   * Detect extension-settings edits this process has not received (the host
+   * injects them as env at spawn, so a pane edit needs a server restart to
+   * arrive) and confirm the ones that did arrive after a relaunch.
+   * Best-effort and host-agnostic: when the host keeps no settings store on
+   * disk there is no signal — and no warning. Results ride in the status
+   * file and the settings page; the log gets each notice once.
+   */
+  private refreshHostSettings(): void {
+    try {
+      this.hostProbe = (this.opts.hostSettingsProbe ?? probeHostSettings)();
+      const flat = this.hostProbe.notices.join("\n");
+      if (flat && flat !== this.lastLoggedNotices) {
+        for (const notice of this.hostProbe.notices) log.warn(notice);
+      }
+      this.lastLoggedNotices = flat;
+    } catch (err) {
+      this.hostProbe = null;
+      log.warn(`host settings probe failed: ${err}`);
+    }
+    try {
+      const file = path.join(this.layout.brokerDir, "env-snapshot.json");
+      for (const change of recordEnvSnapshot(file)) {
+        log.info(`extension setting arrived with this server start: ${change}`);
+      }
+    } catch (err) {
+      log.warn(`could not track the injected settings snapshot: ${err}`);
+    }
+  }
+
   private async runCycleLocked(syncNetwork: boolean): Promise<void> {
     // progress.step() feeds the activity app's live view during boundary
     // calls; it is a no-op when no tool call is being tracked (daemon mode)
     progress.step("checking requests");
+    this.refreshHostSettings();
     let cfg = loadConfig(this.layout.configPath);
     if (await this.processAccountRequests(cfg)) {
       cfg = loadConfig(this.layout.configPath); // pick the new account up this cycle
@@ -528,6 +570,8 @@ export class Broker {
         ...this.loginManager.pendingUrls(),
         ...this.gmailSetup.pendingUrls(),
       },
+      notices: this.hostProbe?.notices ?? [],
+      msClientIds: msClientIdSummary(cfg),
     });
   }
 
@@ -604,6 +648,16 @@ export class Broker {
         if ((await msgraph.authState(this.layout, acct)) !== "needs_login")
           continue;
         this.loginManager.autoAttempted.add(address);
+        if (this.hostProbe?.staleClientId) {
+          // don't pop a browser against an app id the user already replaced
+          // in the settings pane; the restart notice is in `mail status`
+          log.warn(
+            `microsoft: not auto-starting a sign-in for ${address} — the ` +
+              "extension settings name a newer client id than this server " +
+              "was started with (see the notice in `mail status`)",
+          );
+          continue;
+        }
         try {
           await this.loginManager.ensureFlow(this.layout, acct, {
             autoOpen: true,
@@ -755,6 +809,9 @@ export class Broker {
     }
     fs.rmSync(file, { force: true });
     const wanted = String(request.address ?? "").toLowerCase();
+    // `mail login --client-id X` is an explicit override: it must not be
+    // blocked by the stale-settings guard in startRequestedLogin
+    const explicitClientId = Boolean(String(request.client_id ?? "").trim());
 
     if (!wanted) {
       // no address: reopen the sign-in for every Microsoft account
@@ -788,7 +845,7 @@ export class Broker {
         );
         return;
       }
-      await this.startRequestedLogin(existing);
+      await this.startRequestedLogin(existing, { explicitClientId });
       return;
     }
 
@@ -807,7 +864,7 @@ export class Broker {
       );
       return;
     }
-    await this.startRequestedLogin(acct);
+    await this.startRequestedLogin(acct, { explicitClientId });
   }
 
   /** Bring a `mail login`-named address into the config, or explain why not. */
@@ -851,7 +908,10 @@ export class Broker {
     return acct;
   }
 
-  private async startRequestedLogin(acct: AccountConfig): Promise<void> {
+  private async startRequestedLogin(
+    acct: AccountConfig,
+    opts: { explicitClientId?: boolean } = {},
+  ): Promise<void> {
     try {
       let url: string | null;
       if (acct.provider === "gmail") {
@@ -871,6 +931,28 @@ export class Broker {
           log.warn(
             `microsoft account ${acct.address} has no client_id; cannot sign in`,
           );
+          return;
+        }
+        // Definitive staleness: the host's settings pane was edited after
+        // this server started and now names a DIFFERENT app id. Opening a
+        // browser against the old app would waste the user's sign-in, so
+        // fail fast with the fix — unless the agent passed --client-id,
+        // which is an explicit override.
+        if (!opts.explicitClientId && this.hostProbe?.staleClientId) {
+          const reason =
+            "the extension settings set Microsoft app (client) ID " +
+            `${maskClientId(this.hostProbe.paneClientId)}, but this server is ` +
+            `still running with ${maskClientId(acct.client_id)} — restart the ` +
+            "MCP server (in Claude Desktop: fully quit and reopen the app; " +
+            "under another host, restart that host's MCP server), then run " +
+            "`mail login` again — or pass --client-id to sign in with an " +
+            "explicit ID anyway";
+          this.ledger.append(
+            "login_rejected",
+            { address: acct.address, reason },
+            { actor: "agent" },
+          );
+          log.warn(`microsoft login for ${acct.address} deferred: ${reason}`);
           return;
         }
         url = await this.loginManager.ensureFlow(this.layout, acct, {
@@ -1381,6 +1463,7 @@ export class Broker {
             dry_run: fresh.dry_run,
             dry_run_source: dryRunSource(this.layout.configPath),
             allowed_recipient_domains: fresh.policy.allowed_recipient_domains,
+            notices: this.hostProbe?.notices ?? [],
           };
         },
         onSaveSafety: async (values) => {
@@ -1516,6 +1599,8 @@ export class Broker {
           ...this.loginManager.pendingUrls(),
           ...this.gmailSetup.pendingUrls(),
         },
+        notices: this.hostProbe?.notices ?? [],
+        msClientIds: msClientIdSummary(cfg),
       });
     } catch (err) {
       // never let a status refresh break the settings page
