@@ -42,6 +42,12 @@ class FakeGmail implements GmailClientLike {
   async messageCopy() {
     return undefined;
   }
+  async messageFlagsAdd() {
+    return true;
+  }
+  async messageFlagsRemove() {
+    return true;
+  }
   async append() {
     return { uid: 1 };
   }

@@ -605,9 +605,10 @@ export function buildServer(
         "seconds.\n\n" +
         "New mail is pulled in before your command runs, and anything you " +
         "queued (e.g. `mail send`) is executed when the command finishes. " +
-        "If sends, archive/unarchive, or pack requests were processed, the " +
-        "result carries a `send_results` field with what ACTUALLY happened " +
-        "(SENT / ARCHIVED / PACKED / SIMULATED / REJECTED) — trust it over " +
+        "If sends, archive/unarchive, mark-read/mark-unread, or pack " +
+        "requests were processed, the result carries a `send_results` field " +
+        "with what ACTUALLY happened (SENT / ARCHIVED / MARKED READ / " +
+        "PACKED / SIMULATED / REJECTED) — trust it over " +
         "any NOTE printed inside stdout, which was written beforehand.",
       inputSchema: {
         command: z.string().describe("The shell command to run."),

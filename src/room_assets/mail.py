@@ -2,8 +2,8 @@
 """mail - read, search, draft, and queue email from inside the room.
 
 Verbs: index, read, search, fetch, reply, compose, send, status, account,
-login, archive, unarchive, pack, tag, tags, help. Exit codes: 0 ok, 1 usage,
-2 policy refusal, 3 not found.
+login, archive, unarchive, mark-read, mark-unread, pack, tag, tags, help.
+Exit codes: 0 ok, 1 usage, 2 policy refusal, 3 not found.
 
 This file is stdlib-only and runs on the host's own Python 3 (macOS ships
 one; no Node is assumed to exist). It reads the broker's SQLite store
@@ -118,6 +118,15 @@ usage: mail <verb> [args]
   mail unarchive <id-or-path> [...]
       Put archived message(s) back in the inbox. Works by id even when the
       body is not on disk.
+  mail mark-read <id-or-path> [...]
+      Mark message(s) as read in the user's real mailbox (Gmail: IMAP \\Seen
+      flag; Outlook: isRead). `mail read` only displays a message and never
+      touches this flag, so mark what you have triaged explicitly. Queued
+      like send; the outcome (MARKED READ / SIMULATED / REJECTED) rides in
+      the tool result. Works by id even when the body is not on disk.
+  mail mark-unread <id-or-path> [...]
+      Mark message(s) as unread provider-side (e.g. to flag one for the
+      user's own attention). Same queueing and outcomes as mark-read.
   mail pack <path>.docx.md
       Rebase your edits of a .docx attachment's Markdown view back into the
       binary .docx as Word tracked changes (author "AI Agent"). Queued like
@@ -1999,6 +2008,119 @@ def queue_folder_change(args, op):
     return USAGE if failures else OK
 
 
+def queue_read_change(args, op):
+    """
+    Queue mark-read / mark-unread (op: "mark_read" | "mark_unread").
+
+    `mail read` only DISPLAYS a message — it never touches the provider's
+    read flag, so triaged mail kept showing unread in the user's real client.
+    These verbs close that gap through the same folder-request queue as
+    archive. Unlike archive there is no no-op guard and no source-folder
+    restriction: the room stores no per-message read state to compare
+    against, and read state is orthogonal to folders (an archived message
+    can be marked unread without moving it).
+    """
+    verb = op.replace("_", "-")  # request op mark_read <-> CLI verb mark-read
+    state = "read" if op == "mark_read" else "unread"
+    if not args:
+        die(USAGE, f"usage: mail {verb} <id-or-path> [...]")
+    queued, failures = [], 0
+    conn = open_store()
+    try:
+        for arg in args:
+            if looks_like_path(arg):
+                try:
+                    p = resolve_in_room(arg)
+                except SystemExit:
+                    failures += 1  # resolve_in_room already printed the reason
+                    continue
+                address = account_of(p)
+                if (
+                    not address
+                    or folder_of(p) is None
+                    or not p.is_file()
+                    or p.suffix != ".eml"
+                ):
+                    print(
+                        f"error: {arg}: not a message file under accounts/<address>/mail/",
+                        file=sys.stderr,
+                    )
+                    failures += 1
+                    continue
+                raw = p.read_bytes()
+                msg = parse_eml_bytes(raw)
+                message_id = (msg.get("Message-ID") or "").strip()
+                if not message_id:
+                    print(
+                        f"error: {arg}: message has no Message-ID header; "
+                        f"cannot mark it {state} provider-side",
+                        file=sys.stderr,
+                    )
+                    failures += 1
+                    continue
+                request = {
+                    "op": op,
+                    "account": address,
+                    "path": rel(p),
+                    "sha": sha12(raw),
+                    "message_id": str(message_id),
+                    "ts": now_iso(),
+                }
+            else:
+                record = get_by_sha(conn, arg) if conn else None
+                if record is None:
+                    print(f"error: {arg}: no such file or message id", file=sys.stderr)
+                    failures += 1
+                    continue
+                if not record["rfc_message_id"]:
+                    print(
+                        f"error: {arg}: the index has no Message-ID for it; "
+                        f"run 'mail fetch {record['sha']}' first",
+                        file=sys.stderr,
+                    )
+                    failures += 1
+                    continue
+                request = {
+                    "op": op,
+                    "account": record["account"],
+                    "path": record["path"],
+                    "sha": record["sha"],
+                    "message_id": record["rfc_message_id"],
+                    "ts": now_iso(),
+                }
+            append_jsonl(FOLDER_REQUEST_FILE, request)
+            print(f"{verb.upper()} queued: {request['path'] or request['sha']}")
+            queued.append(request)
+    finally:
+        if conn is not None:
+            conn.close()
+    if queued:
+        status = read_status()
+        if status is not None and status.get("dry_run") is not False:
+            print(
+                f"NOTE: dry_run is on — the broker will SIMULATE this {verb} when "
+                "the command ends: NOTHING changes provider-side, so the message "
+                f"is NOT marked {state} in the user's mailbox. Turn dry run off "
+                "via `mail settings` to apply it for real."
+            )
+        else:
+            print(
+                f"NOTE: the broker applies this {verb} provider-side when this "
+                "command ends; the authoritative outcome appears in the tool "
+                f"result (MARKED {state.upper()} / SIMULATED / REJECTED). Never "
+                "deletes anything."
+            )
+    return USAGE if failures else OK
+
+
+def cmd_mark_read(args):
+    return queue_read_change(args, "mark_read")
+
+
+def cmd_mark_unread(args):
+    return queue_read_change(args, "mark_unread")
+
+
 def cmd_pack(args):
     if len(args) != 1:
         die(USAGE, "usage: mail pack <path-to-docx-md-view>")
@@ -2730,6 +2852,8 @@ VERBS = {
     "settings": cmd_settings,
     "archive": cmd_archive,
     "unarchive": cmd_unarchive,
+    "mark-read": cmd_mark_read,
+    "mark-unread": cmd_mark_unread,
     "pack": cmd_pack,
     "import": cmd_import,
     "export": cmd_export,

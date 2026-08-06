@@ -70,11 +70,28 @@ export const BACKFILL_BUDGET_MS = 2500;
 
 const LOGIN_REQUEST_FILE = ".login-request.json"; // in room/, written by `mail login`
 const ACCOUNT_REQUEST_FILE = ".account-request.json"; // in room/, written by `mail account add`
-const FOLDER_REQUEST_FILE = ".folder-request.jsonl"; // in room/, written by `mail archive`/`mail unarchive`
+const FOLDER_REQUEST_FILE = ".folder-request.jsonl"; // in room/, written by `mail archive`/`mail unarchive`/`mail mark-read`/`mail mark-unread`
 const PACK_REQUEST_FILE = ".pack-request.jsonl"; // in room/, written by `mail pack`
 const FETCH_REQUEST_FILE = ".fetch-request.jsonl"; // in room/, written by `mail fetch`
 const SETTINGS_REQUEST_FILE = ".settings-request.json"; // in room/, written by `mail settings`
 const PENDING_REMOVALS_FILE = "pending-removals.json"; // in broker/, written from the settings page
+
+/** "archive" -> "ARCHIVE", "mark_read" -> "MARK READ": the imperative form. */
+function folderOpWord(op: string): string {
+  return op.toUpperCase().replace(/_/g, " ");
+}
+
+/** "archive" -> "ARCHIVED", "mark_read" -> "MARKED READ": the outcome form. */
+function folderOpDone(op: string): string {
+  switch (op) {
+    case "mark_read":
+      return "MARKED READ";
+    case "mark_unread":
+      return "MARKED UNREAD";
+    default:
+      return `${folderOpWord(op)}D`;
+  }
+}
 
 /**
  * Human sentences for the send outcomes in a slice of ledger records — what
@@ -117,17 +134,17 @@ export function sendOutcomeLines(records: LedgerRecord[]): string[] {
       );
     } else if (record.op === "folder_change_executed") {
       lines.push(
-        `${String(details.op ?? "change").toUpperCase()}D: ${details.path || sha} ` +
+        `${folderOpDone(String(details.op ?? "change"))}: ${details.path || sha} ` +
           `(provider result: ${details.result ?? "applied"}; ledger: folder_change_executed)`,
       );
     } else if (record.op === "folder_change_simulated") {
       lines.push(
-        `SIMULATED ${String(details.op ?? "change").toUpperCase()}: ${details.path || sha} — ` +
+        `SIMULATED ${folderOpWord(String(details.op ?? "change"))}: ${details.path || sha} — ` +
           "dry_run is on, no provider-side change was made (ledger: folder_change_simulated)",
       );
     } else if (record.op === "folder_change_rejected") {
       lines.push(
-        `${String(details.op ?? "change").toUpperCase()} REJECTED (${details.reason ?? "?"}): ` +
+        `${folderOpWord(String(details.op ?? "change"))} REJECTED (${details.reason ?? "?"}): ` +
           `${details.detail ?? ""} — nothing was changed (${details.path || sha})`,
       );
       // DraftBox (`mail draft` / `mail draft-delete`): a provider-side draft is
@@ -237,18 +254,33 @@ class CycleLock {
 }
 
 /**
- * Provider backends for the folder-change primitive (archive/unarchive now,
- * `mail move` in phase 2). Injected so tests can fake them; the defaults
- * call the real Gmail/Graph adapters with the archive/unarchive presets.
+ * The operations `mail` can queue into room/.folder-request.jsonl. Folder
+ * moves (archive/unarchive) re-home the local .eml afterwards; read-state
+ * marks (mark_read/mark_unread) are provider-only — the room stores no
+ * per-message read flag, so there is nothing local to mirror.
+ */
+export const FOLDER_REQUEST_OPS = [
+  "archive",
+  "unarchive",
+  "mark_read",
+  "mark_unread",
+] as const;
+export type FolderRequestOp = (typeof FOLDER_REQUEST_OPS)[number];
+
+/**
+ * Provider backends for the folder-change primitive (archive/unarchive and
+ * mark_read/mark_unread now, `mail move` in phase 2). Injected so tests can
+ * fake them; the defaults call the real Gmail/Graph adapters with per-op
+ * presets.
  */
 export interface FolderOps {
   gmail: (
     acct: AccountConfig,
-    change: { op: "archive" | "unarchive"; messageId: string },
+    change: { op: FolderRequestOp; messageId: string },
   ) => Promise<"applied" | "noop">;
   microsoft: (
     acct: AccountConfig,
-    change: { op: "archive" | "unarchive"; messageId: string },
+    change: { op: FolderRequestOp; messageId: string },
   ) => Promise<"applied" | "noop">;
 }
 
@@ -985,11 +1017,12 @@ export class Broker {
   }
 
   /**
-   * `mail archive` / `mail unarchive` append JSONL requests to
-   * room/.folder-request.jsonl; execute them here. Each request is handled
-   * independently (a bad one costs itself, not the batch), honours dry_run,
-   * is idempotent provider-side, and never deletes anything. On success (or
-   * simulation) the local .eml moves between INBOX/ and Archive/ and the
+   * `mail archive` / `mail unarchive` / `mail mark-read` / `mail mark-unread`
+   * append JSONL requests to room/.folder-request.jsonl; execute them here.
+   * Each request is handled independently (a bad one costs itself, not the
+   * batch), honours dry_run, is idempotent provider-side, and never deletes
+   * anything. On a successful (or simulated) archive/unarchive the local
+   * .eml moves between INBOX/ and Archive/ and the
    * index row is re-homed so `mail index` reflects the change.
    */
   private async processFolderRequests(
@@ -1009,7 +1042,8 @@ export class Broker {
           { sha: sha || null },
         );
       };
-      if (op !== "archive" && op !== "unarchive") {
+      const opName = FOLDER_REQUEST_OPS.find((known) => known === op);
+      if (!opName) {
         reject("invalid_op", `unknown folder operation ${JSON.stringify(op)}`);
         continue;
       }
@@ -1054,13 +1088,20 @@ export class Broker {
       }
       try {
         const ops = this.opts.folderOps ?? this.defaultFolderOps(cfg);
-        const result = await ops[acct.provider](acct, { op, messageId });
+        const result = await ops[acct.provider](acct, {
+          op: opName,
+          messageId,
+        });
         this.ledger.append(
           "folder_change_executed",
           { op, account, path: relPath, result },
           { sha: sha || null },
         );
-        this.applyLocalFolderChange(op, account, relPath, sha, explained);
+        // read-state marks are provider-only: the room stores no per-message
+        // read flag, so there is no local file or index row to touch
+        if (opName === "archive" || opName === "unarchive") {
+          this.applyLocalFolderChange(opName, account, relPath, sha, explained);
+        }
       } catch (err) {
         if (err instanceof intents.Rejection) reject(err.reason, err.detail);
         else reject("error", String(err));
@@ -1340,11 +1381,23 @@ export class Broker {
     };
   }
 
-  /** Archive/unarchive presets over the provider-abstracted primitive. */
+  /**
+   * Archive/unarchive and mark-read/mark-unread presets over the
+   * provider-abstracted primitives.
+   */
   private defaultFolderOps(cfg: Config): FolderOps {
     return {
-      gmail: (acct, change) =>
-        gmail.applyFolderChange(
+      gmail: (acct, change) => {
+        if (change.op === "mark_read" || change.op === "mark_unread") {
+          return gmail.setReadState(
+            this.layout,
+            cfg,
+            acct,
+            { messageId: change.messageId, read: change.op === "mark_read" },
+            { connCache: this.gmailConn },
+          );
+        }
+        return gmail.applyFolderChange(
           this.layout,
           cfg,
           acct,
@@ -1360,12 +1413,20 @@ export class Broker {
                 addLabels: ["INBOX"],
               },
           { connCache: this.gmailConn },
-        ),
-      microsoft: (acct, change) =>
-        msgraph.moveMessage(this.layout, acct, {
+        );
+      },
+      microsoft: (acct, change) => {
+        if (change.op === "mark_read" || change.op === "mark_unread") {
+          return msgraph.setReadState(this.layout, acct, {
+            internetMessageId: change.messageId,
+            isRead: change.op === "mark_read",
+          });
+        }
+        return msgraph.moveMessage(this.layout, acct, {
           internetMessageId: change.messageId,
           target: change.op === "archive" ? "archive" : "inbox",
-        }),
+        });
+      },
     };
   }
 

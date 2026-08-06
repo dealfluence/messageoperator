@@ -348,6 +348,40 @@ describe("mail CLI (python/sqlite)", () => {
     expect(requests[1].sha).toBe(metaSha);
   });
 
+  it("marks read by path and unread by id (metadata-only rows included)", () => {
+    const layout = makeLayout();
+    const { rel } = seedMessage(layout, "triage me", "x", 100);
+    const out = mail(layout, ["mark-read", rel]).stdout;
+    expect(out).toContain("MARK-READ queued:");
+    const metaSha = seedMeta(layout, "old unread", 50);
+    const out2 = mail(layout, ["mark-unread", metaSha]).stdout;
+    expect(out2).toContain("MARK-UNREAD queued:");
+
+    const requests = fs
+      .readFileSync(path.join(layout.room, ".folder-request.jsonl"), "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(requests).toHaveLength(2);
+    expect(requests[0].op).toBe("mark_read");
+    expect(requests[0].message_id).toBe("<triage-me@x>");
+    expect(requests[1].op).toBe("mark_unread");
+    expect(requests[1].message_id).toBe("<old-unread@old>");
+    expect(requests[1].path).toBe("");
+    expect(requests[1].sha).toBe(metaSha);
+  });
+
+  it("mark-read by id refuses when the index lacks a Message-ID", () => {
+    const layout = makeLayout();
+    const sha = seedMeta(layout, "no rfc id read", 50, {
+      rfcMessageId: undefined,
+      folder: "INBOX",
+      labels: ["INBOX"],
+    });
+    const out = mail(layout, ["mark-read", sha], { expectCode: 1 });
+    expect(out.stderr).toContain("no Message-ID");
+  });
+
   it("archive by id refuses when the index lacks a Message-ID", () => {
     const layout = makeLayout();
     const sha = seedMeta(layout, "no rfc id", 50, {

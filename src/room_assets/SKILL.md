@@ -78,6 +78,14 @@ disk are only the bodies downloaded so far.
   room to match. So a message can change folder between your commands without
   you doing anything — re-read `mail index` rather than trusting an earlier
   listing's folder.
+- `mail mark-read <id-or-path> [...]` / `mail mark-unread <id-or-path> [...]` —
+  set a message's read/unread state in the user's real mailbox (Gmail: the
+  IMAP `\Seen` flag; Outlook: the `isRead` property). IMPORTANT: `mail read`
+  only DISPLAYS a message — it never marks anything read provider-side, so
+  after triaging an inbox the messages you handled still show unread in the
+  user's own mail client unless you `mail mark-read` them. Queued like send:
+  the outcome (MARKED READ / MARKED UNREAD / SIMULATED / REJECTED) rides in
+  the tool result. Works by id even for messages whose body is not on disk.
 - `mail pack attachments/<sha>/file.docx.md` — rebase your edits of a .docx
   attachment's Markdown view back into the binary as native Word Tracked
   Changes (author "AI Agent"). Queued like send: the outcome (PACKED /
@@ -303,7 +311,7 @@ Your NEXT command sees the outcome: if the send was rejected, the draft is
 back in Drafts/ with a `<name>.rejected.txt` beside it explaining why — read
 it, fix the draft, send again. If accepted, the draft moved to Sent/.
 
-Note that **`dry_run` is a general policy scope** which simulates _both_ outbound sends (`SIMULATED`) and folder-state moves like `mail archive` or `mail unarchive` (`SIMULATED ARCHIVE` / `SIMULATED UNARCHIVE`) without making any actual API calls to the email providers.
+Note that **`dry_run` is a general policy scope** which simulates outbound sends (`SIMULATED`), folder-state moves like `mail archive` or `mail unarchive` (`SIMULATED ARCHIVE` / `SIMULATED UNARCHIVE`), _and_ read-state marks like `mail mark-read` or `mail mark-unread` (`SIMULATED MARK READ` / `SIMULATED MARK UNREAD`) without making any actual API calls to the email providers.
 
 **A SIMULATED send still counts toward `max_sends_per_hour`.** Dry run skips the
 network call, not the policy check, and the attempt is ledgered either way — so
@@ -319,8 +327,8 @@ result that ran `mail send`.** The `NOTE:` line in stdout is a prediction
 printed before the send was executed; `send_results` is written after, and
 says what actually happened: `SENT` (delivered), `SIMULATED` (dry_run on),
 or `REJECTED (reason)` (draft returned with a `.rejected.txt`). The same
-field carries FETCHED / ARCHIVED / PACKED outcomes for the other queued
-verbs.
+field carries FETCHED / ARCHIVED / MARKED READ / MARKED UNREAD / PACKED
+outcomes for the other queued verbs.
 
 ## Auth is lazy — relay it honestly
 

@@ -6,6 +6,7 @@ import { Broker, type FolderOps, sendOutcomeLines } from "../src/broker.js";
 import {
   applyFolderChange,
   type GmailClientLike,
+  setReadState as gmailSetReadState,
   uploadDraft as gmailUploadDraft,
   deleteDraft as gmailDeleteDraft,
 } from "../src/gmail.js";
@@ -14,6 +15,7 @@ import { sha12 } from "../src/layout.js";
 import {
   moveMessage,
   type RequestFn,
+  setReadState as graphSetReadState,
   uploadDraft as graphUploadDraft,
   deleteDraft as graphDeleteDraft,
 } from "../src/msgraph.js";
@@ -85,6 +87,20 @@ class FakeFolderImap implements GmailClientLike {
     this.calls.push(`copy:${this.current}->${destination}`);
     return undefined;
   }
+  async messageFlagsAdd(
+    _range: number[] | string,
+    flags: string[],
+  ): Promise<unknown> {
+    this.calls.push(`flags+:${this.current}:${flags.join(",")}`);
+    return true;
+  }
+  async messageFlagsRemove(
+    _range: number[] | string,
+    flags: string[],
+  ): Promise<unknown> {
+    this.calls.push(`flags-:${this.current}:${flags.join(",")}`);
+    return true;
+  }
   async append(
     mailbox: string,
     _content: Buffer | string,
@@ -104,10 +120,10 @@ class FakeFolderImap implements GmailClientLike {
 }
 
 function assertNeverDestructive(calls: string[]): void {
-  // the whole feature contract: no deletion, no trash, no expunge, no flags
-  expect(
-    calls.filter((c) => /delete|trash|expunge|flag|store/i.test(c)),
-  ).toEqual([]);
+  // the whole feature contract: no deletion, no trash, no expunge. Flag
+  // writes are allowed (mark-read toggles \Seen) but must never touch
+  // \Deleted — the /delete/ pattern catches a `flags±:...:\Deleted` call.
+  expect(calls.filter((c) => /delete|trash|expunge/i.test(c))).toEqual([]);
   expect(calls.filter((c) => /->\[Gmail\]\/Trash/.test(c))).toEqual([]);
 }
 
@@ -226,6 +242,80 @@ describe("gmail applyFolderChange", () => {
   });
 });
 
+describe("gmail setReadState", () => {
+  it("mark read sets \\Seen on the message (found via All Mail)", async () => {
+    const layout = makeLayout();
+    const client = new FakeFolderImap({
+      INBOX: { 7: MSG_ID },
+      "[Gmail]/All Mail": { 7: MSG_ID },
+    });
+    const result = await gmailSetReadState(
+      layout,
+      makeConfig(),
+      GMAIL_ACCT,
+      { messageId: MSG_ID, read: true },
+      gmailOpts(client),
+    );
+    expect(result).toBe("applied");
+    expect(client.calls).toContain("flags+:[Gmail]/All Mail:\\Seen");
+    // read state is not a folder: nothing moves, nothing is copied
+    expect(client.calls.filter((c) => c.startsWith("move:"))).toEqual([]);
+    expect(client.calls.filter((c) => c.startsWith("copy:"))).toEqual([]);
+    assertNeverDestructive(client.calls);
+  });
+
+  it("mark unread removes \\Seen", async () => {
+    const layout = makeLayout();
+    const client = new FakeFolderImap({
+      INBOX: {},
+      "[Gmail]/All Mail": { 3: MSG_ID },
+    });
+    const result = await gmailSetReadState(
+      layout,
+      makeConfig(),
+      GMAIL_ACCT,
+      { messageId: MSG_ID, read: false },
+      gmailOpts(client),
+    );
+    expect(result).toBe("applied");
+    expect(client.calls).toContain("flags-:[Gmail]/All Mail:\\Seen");
+    assertNeverDestructive(client.calls);
+  });
+
+  it("rejects when the message exists nowhere", async () => {
+    const layout = makeLayout();
+    const client = new FakeFolderImap({ INBOX: {}, "[Gmail]/All Mail": {} });
+    await expect(
+      gmailSetReadState(
+        layout,
+        makeConfig(),
+        GMAIL_ACCT,
+        { messageId: MSG_ID, read: true },
+        gmailOpts(client),
+      ),
+    ).rejects.toThrow(Rejection);
+    assertNeverDestructive(client.calls);
+  });
+
+  it("fails safe with no app password: rejects, zero provider calls", async () => {
+    const layout = makeLayout();
+    const client = new FakeFolderImap({ "[Gmail]/All Mail": { 7: MSG_ID } });
+    await expect(
+      gmailSetReadState(
+        layout,
+        makeConfig(),
+        GMAIL_ACCT,
+        { messageId: MSG_ID, read: true },
+        {
+          clientFactory: async () => client,
+          getPassword: async () => null,
+        },
+      ),
+    ).rejects.toThrow(Rejection);
+    expect(client.calls).toEqual([]);
+  });
+});
+
 describe("gmail provider drafts", () => {
   it("uploadDraft APPENDs to the \\Drafts special-use mailbox with \\Draft", async () => {
     const layout = makeLayout();
@@ -314,16 +404,34 @@ function fakeGraph(state: {
   messageParent: string | null; // null = message not found
   archiveId?: string;
   inboxId?: string;
+  isRead?: boolean;
 }) {
   const requests: string[] = [];
-  const requestFn: RequestFn = async (method, url, _token, _opts) => {
+  const requestFn: RequestFn = async (method, url, _token, opts) => {
     requests.push(`${method} ${url}`);
     if (method === "GET" && url.includes("/me/messages?")) {
       const value =
         state.messageParent === null
           ? []
-          : [{ id: "msg-1", parentFolderId: state.messageParent }];
+          : [
+              {
+                id: "msg-1",
+                parentFolderId: state.messageParent,
+                isRead: state.isRead ?? false,
+              },
+            ];
       return { status: 200, body: Buffer.from(JSON.stringify({ value })) };
+    }
+    if (method === "PATCH" && url.endsWith("/me/messages/msg-1")) {
+      state.isRead = Boolean(
+        JSON.parse((opts?.data ?? Buffer.from("{}")).toString("utf-8")).isRead,
+      );
+      return {
+        status: 200,
+        body: Buffer.from(
+          JSON.stringify({ id: "msg-1", isRead: state.isRead }),
+        ),
+      };
     }
     if (method === "GET" && url.includes("/me/mailFolders/archive")) {
       return {
@@ -406,6 +514,76 @@ describe("graph moveMessage", () => {
         layout,
         MS_ACCT,
         { internetMessageId: MSG_ID, target: "archive" },
+        { requestFn, getToken: async () => null },
+      ),
+    ).rejects.toThrow(Rejection);
+    expect(requests).toEqual([]);
+  });
+});
+
+describe("graph setReadState", () => {
+  it("PATCHes isRead when the provider state differs", async () => {
+    const layout = makeLayout();
+    const state = { messageParent: "inbox-id", isRead: false };
+    const { requests, requestFn } = fakeGraph(state);
+    const result = await graphSetReadState(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, isRead: true },
+      { requestFn, getToken: async () => "tok" },
+    );
+    expect(result).toBe("applied");
+    expect(
+      requests.some(
+        (r) => r.startsWith("PATCH") && r.includes("/me/messages/msg-1"),
+      ),
+    ).toBe(true);
+    expect(state.isRead).toBe(true);
+    // never destructive, never a move
+    expect(
+      requests.filter((r) =>
+        /DELETE|deleteditems|permanentDelete|\/move/i.test(r),
+      ),
+    ).toEqual([]);
+  });
+
+  it("is idempotent when the provider already agrees", async () => {
+    const layout = makeLayout();
+    const { requests, requestFn } = fakeGraph({
+      messageParent: "inbox-id",
+      isRead: true,
+    });
+    const result = await graphSetReadState(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, isRead: true },
+      { requestFn, getToken: async () => "tok" },
+    );
+    expect(result).toBe("noop");
+    expect(requests.filter((r) => r.startsWith("PATCH"))).toEqual([]);
+  });
+
+  it("rejects when the message cannot be found", async () => {
+    const layout = makeLayout();
+    const { requestFn } = fakeGraph({ messageParent: null });
+    await expect(
+      graphSetReadState(
+        layout,
+        MS_ACCT,
+        { internetMessageId: MSG_ID, isRead: true },
+        { requestFn, getToken: async () => "tok" },
+      ),
+    ).rejects.toThrow(Rejection);
+  });
+
+  it("fails safe when unauthenticated: rejects, zero requests", async () => {
+    const layout = makeLayout();
+    const { requests, requestFn } = fakeGraph({ messageParent: "inbox-id" });
+    await expect(
+      graphSetReadState(
+        layout,
+        MS_ACCT,
+        { internetMessageId: MSG_ID, isRead: false },
         { requestFn, getToken: async () => null },
       ),
     ).rejects.toThrow(Rejection);
@@ -885,6 +1063,81 @@ describe("broker folder-change processing", () => {
     broker.close();
   });
 
+  it("executes a mark-read live without moving the local file", async () => {
+    const applied: string[] = [];
+    const broker = makeArchiveBroker({
+      dryRun: false,
+      folderOps: {
+        gmail: async (acct, change) => {
+          applied.push(`${acct.address}:${change.op}:${change.messageId}`);
+          return "applied";
+        },
+        microsoft: async () => "applied",
+      },
+    });
+    await broker.runCycle({ syncNetwork: false });
+    const seeded = seedInbox(broker, "triage me", MSG_ID);
+    await broker.runCycle({ syncNetwork: false });
+    queueRequest(broker, {
+      op: "mark_read",
+      account: "a@gmail.com",
+      path: seeded.relPath,
+      sha: seeded.sha,
+      message_id: MSG_ID,
+    });
+
+    const outcomes = await broker.pushReport();
+    expect(applied).toEqual([`a@gmail.com:mark_read:${MSG_ID}`]);
+    expect(outcomes.some((l) => l.startsWith("MARKED READ"))).toBe(true);
+    // read state is not a folder: the local .eml stays exactly where it was
+    expect(fs.existsSync(path.join(broker.layout.room, seeded.relPath))).toBe(
+      true,
+    );
+    expect(broker.index.getBySha(seeded.sha)?.folder).toBe("INBOX");
+    const executed = broker.ledger
+      .readAll()
+      .find((r) => r.op === "folder_change_executed");
+    expect((executed?.details as any).op).toBe("mark_read");
+    broker.close();
+  });
+
+  it("simulates mark-read under dry_run: no provider call", async () => {
+    let providerCalled = 0;
+    const broker = makeArchiveBroker({
+      dryRun: true,
+      folderOps: {
+        gmail: async () => {
+          providerCalled += 1;
+          return "applied";
+        },
+        microsoft: async () => {
+          providerCalled += 1;
+          return "applied";
+        },
+      },
+    });
+    await broker.runCycle({ syncNetwork: false });
+    const seeded = seedInbox(broker, "dry run mark", MSG_ID);
+    await broker.runCycle({ syncNetwork: false });
+    queueRequest(broker, {
+      op: "mark_unread",
+      account: "a@gmail.com",
+      path: seeded.relPath,
+      sha: seeded.sha,
+      message_id: MSG_ID,
+    });
+
+    const outcomes = await broker.pushReport();
+    expect(providerCalled).toBe(0);
+    expect(outcomes.some((l) => l.includes("SIMULATED MARK UNREAD"))).toBe(
+      true,
+    );
+    expect(
+      broker.ledger.readAll().some((r) => r.op === "folder_change_simulated"),
+    ).toBe(true);
+    broker.close();
+  });
+
   it("unarchive preset restores the local file to INBOX", async () => {
     const broker = makeArchiveBroker({
       dryRun: false,
@@ -958,5 +1211,41 @@ describe("sendOutcomeLines folder-change rendering", () => {
     expect(lines[0]).toContain("ARCHIVED");
     expect(lines[1]).toContain("SIMULATED UNARCHIVE");
     expect(lines[2]).toContain("ARCHIVE REJECTED (needs_auth)");
+  });
+
+  it("renders mark-read outcomes in plain words (never MARK_READD)", () => {
+    const lines = sendOutcomeLines([
+      {
+        ts: "",
+        actor: "broker",
+        op: "folder_change_executed",
+        sha: "abc",
+        details: { op: "mark_read", path: "p", result: "applied" },
+      },
+      {
+        ts: "",
+        actor: "broker",
+        op: "folder_change_simulated",
+        sha: "def",
+        details: { op: "mark_unread", path: "q" },
+      },
+      {
+        ts: "",
+        actor: "broker",
+        op: "folder_change_rejected",
+        sha: "ghi",
+        details: {
+          op: "mark_read",
+          path: "r",
+          reason: "needs_auth",
+          detail: "run mail login",
+        },
+      },
+    ]);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain("MARKED READ: p");
+    expect(lines[1]).toContain("SIMULATED MARK UNREAD: q");
+    expect(lines[2]).toContain("MARK READ REJECTED (needs_auth)");
+    expect(lines.join("\n")).not.toMatch(/MARK_READ|MARK_UNREAD/);
   });
 });

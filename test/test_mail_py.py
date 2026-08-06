@@ -1559,6 +1559,87 @@ class FolderChangeHonestyTests(MailCliTestBase):
         self.assertIn("mail archive", proc.stdout)
 
 
+class MarkReadVerbTests(MailCliTestBase):
+    """
+    `mail read` never touches the provider's read/unread flag, so an agent
+    triaging an inbox left every handled message showing unread in the user's
+    real client (no workaround at all for Outlook accounts). These pin the
+    explicit verbs that close that gap: mark-read / mark-unread queue a
+    folder-request the broker pushes provider-side (Gmail: IMAP \\Seen flag;
+    Outlook: Graph isRead PATCH).
+    """
+
+    ACCT = "me@adeu.ai"
+
+    def _status(self, dry_run):
+        (self.room / ".broker-status.json").write_text(
+            json.dumps({"dry_run": dry_run}), encoding="utf-8"
+        )
+
+    def _seed(self, folder="INBOX", message_id="<seen@vendor.com>"):
+        raw = (
+            "From: s@vendor.com\r\n"
+            "To: me@adeu.ai\r\n"
+            "Subject: Mark me\r\n"
+            + (f"Message-ID: {message_id}\r\n" if message_id else "")
+            + "Date: Mon, 06 Jul 2026 10:00:00 +0000\r\n"
+            "\r\n"
+            "body\r\n"
+        )
+        return self.write_inbound(
+            self.ACCT, "1700000000.bbbbbbbbbbbb.eml", raw, folder=folder
+        )
+
+    def _requests(self):
+        f = self.room / ".folder-request.jsonl"
+        if not f.is_file():
+            return []
+        return [
+            json.loads(line)
+            for line in f.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def test_mark_read_by_path_queues_a_provider_request(self):
+        self._status(False)
+        p = self._seed()
+        proc = self.run_mail("mark-read", self.rel(p), expect_code=0)
+        self.assertIn("MARK-READ queued", proc.stdout)
+        requests = self._requests()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["op"], "mark_read")
+        self.assertEqual(requests[0]["account"], self.ACCT)
+        self.assertEqual(requests[0]["message_id"], "<seen@vendor.com>")
+        self.assertEqual(requests[0]["path"], self.rel(p))
+
+    def test_mark_unread_works_from_archive_too(self):
+        # read state is orthogonal to folders: an archived message can be
+        # marked unread without moving it
+        self._status(False)
+        p = self._seed(folder="Archive")
+        proc = self.run_mail("mark-unread", self.rel(p), expect_code=0)
+        self.assertIn("MARK-UNREAD queued", proc.stdout)
+        requests = self._requests()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["op"], "mark_unread")
+
+    def test_dry_run_note_is_honest(self):
+        self._status(True)
+        p = self._seed()
+        proc = self.run_mail("mark-read", self.rel(p), expect_code=0)
+        self.assertIn("MARK-READ queued", proc.stdout)
+        self.assertIn("dry_run is on", proc.stdout)
+        self.assertIn("NOTHING changes", proc.stdout)
+        self.assertIn("NOT marked", proc.stdout)
+
+    def test_refuses_a_message_without_message_id(self):
+        self._status(False)
+        p = self._seed(message_id=None)
+        proc = self.run_mail("mark-read", self.rel(p), expect_code=1)
+        self.assertIn("Message-ID", proc.stderr)
+        self.assertEqual(self._requests(), [])
+
+
 class DisconnectedMailboxTests(MailCliTestBase):
     """
     Removing an account KEEPS its local mail by default (the settings page

@@ -34,6 +34,14 @@ class FakeImap implements GmailClientLike {
     this.calls.push("messageCopy");
     return undefined;
   }
+  async messageFlagsAdd(): Promise<unknown> {
+    this.calls.push("messageFlagsAdd");
+    return true;
+  }
+  async messageFlagsRemove(): Promise<unknown> {
+    this.calls.push("messageFlagsRemove");
+    return true;
+  }
   async append(): Promise<{ uid?: number } | false> {
     this.calls.push("append");
     return { uid: 1 };
@@ -268,6 +276,12 @@ describe("on-demand body fetch (gmail)", () => {
     }
     async messageCopy() {
       return undefined;
+    }
+    async messageFlagsAdd() {
+      return true;
+    }
+    async messageFlagsRemove() {
+      return true;
     }
     async append() {
       return { uid: 1 };

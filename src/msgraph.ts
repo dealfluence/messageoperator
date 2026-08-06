@@ -1154,6 +1154,70 @@ export async function moveMessage(
   return "applied";
 }
 
+// ---- read state (mark-read / mark-unread) ----------------------------
+//
+// The provider-abstracted read-state primitive, Graph side. Outlook exposes
+// read state as the message's `isRead` property, so both mark-read and
+// mark-unread reduce to one PATCH /me/messages/{id}. Identified by
+// internetMessageId (the RFC Message-ID) like moveMessage above, and a
+// clean no-op when the provider already agrees. NEVER destructive: a PATCH
+// of one boolean property — no DELETE, no move, no folder change.
+
+export async function setReadState(
+  layout: Layout,
+  acct: AccountConfig,
+  change: { internetMessageId: string; isRead: boolean },
+  opts: {
+    requestFn?: RequestFn;
+    getToken?: (acct: AccountConfig) => Promise<string | null>;
+  } = {},
+): Promise<"applied" | "noop"> {
+  const requestFn = opts.requestFn ?? defaultRequestFn;
+  const getToken =
+    opts.getToken ?? ((a: AccountConfig) => acquireTokenSilentFor(layout, a));
+  const token = await getToken(acct);
+  if (token === null) {
+    throw new Rejection(
+      "needs_auth",
+      `microsoft account ${acct.address} is not authenticated; ${LOGIN_HINT}`,
+    );
+  }
+
+  // OData string literal: single quotes double
+  const literal = change.internetMessageId.replace(/'/g, "''");
+  const found = await requestFn(
+    "GET",
+    `${GRAPH}/me/messages?$filter=internetMessageId eq '${encodeURIComponent(literal)}'` +
+      `&$select=id,isRead`,
+    token,
+  );
+  const value = (JSON.parse(found.body.toString("utf-8")).value ??
+    []) as Array<{
+    id: string;
+    isRead?: boolean;
+  }>;
+  const message = value[0];
+  if (!message) {
+    throw new Rejection(
+      "message_not_found",
+      `no message with internetMessageId ${change.internetMessageId} found in ${acct.address}`,
+    );
+  }
+
+  if (message.isRead === change.isRead) return "noop"; // already there
+
+  const patched = await requestFn(
+    "PATCH",
+    `${GRAPH}/me/messages/${message.id}`,
+    token,
+    { data: Buffer.from(JSON.stringify({ isRead: change.isRead })) },
+  );
+  if (patched.status !== 200) {
+    throw new Error(`graph isRead patch returned ${patched.status}`);
+  }
+  return "applied";
+}
+
 // ---- provider drafts (upload / delete) -------------------------------
 //
 // The provider-abstracted draft primitive, Graph side. A draft is created by

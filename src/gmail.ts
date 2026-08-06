@@ -95,6 +95,16 @@ export interface GmailClientLike {
     destination: string,
     opts: { uid: boolean },
   ): Promise<unknown>;
+  messageFlagsAdd(
+    range: number[] | string,
+    flags: string[],
+    opts: { uid: boolean },
+  ): Promise<unknown>;
+  messageFlagsRemove(
+    range: number[] | string,
+    flags: string[],
+    opts: { uid: boolean },
+  ): Promise<unknown>;
   append(
     mailbox: string,
     content: Buffer | string,
@@ -1052,6 +1062,60 @@ export async function applyFolderChange(
       `label change not supported yet (remove: ${change.removeLabels.join(",") || "-"}; ` +
         `add: ${change.addLabels.join(",") || "-"})`,
     );
+  } finally {
+    if (ownsCache) await cache.discard();
+  }
+}
+
+// ---- read state (mark-read / mark-unread) ----------------------------
+//
+// The provider-abstracted read-state primitive, Gmail side. Gmail's read
+// state is the IMAP \Seen flag, which Gmail keeps global per message (a
+// STORE in any mailbox view updates every label view), so the message is
+// flagged where it is found: the \All mailbox, which holds every message
+// that is not in Spam or Trash. Identified by its Message-ID header, like
+// applyFolderChange above. NEVER destructive: the only flag ever touched
+// is \Seen — never \Deleted, never EXPUNGE, never a move.
+
+export async function setReadState(
+  layout: Layout,
+  cfg: Config,
+  acct: AccountConfig,
+  change: { messageId: string; read: boolean },
+  opts: GmailSyncOptions = {},
+): Promise<"applied" | "noop"> {
+  const getPassword = opts.getPassword ?? gmailAppPassword;
+  const password = await getPassword(layout, cfg, acct.address);
+  if (!password) {
+    throw new Rejection(
+      "needs_auth",
+      `gmail app password for ${acct.address} is not available — ` +
+        `run \`mail login ${acct.address}\` and finish the setup page`,
+    );
+  }
+  const factory = opts.clientFactory ?? defaultClientFactory;
+  const ownsCache = !opts.connCache;
+  const cache = opts.connCache ?? new ConnectionCache();
+  try {
+    const client = await cache.get(acct.address, password, factory);
+    const all = await allMailbox(client);
+    const uids = await findByMessageId(client, all, change.messageId, {
+      readOnly: false,
+    });
+    if (!uids.length) {
+      throw new Rejection(
+        "message_not_found",
+        `no message with Message-ID ${change.messageId} found in ${all}`,
+      );
+    }
+    if (change.read) {
+      await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+    } else {
+      await client.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+    }
+    // setting/clearing \Seen is idempotent server-side, so a repeat request
+    // is harmlessly re-applied rather than probed for first
+    return "applied";
   } finally {
     if (ownsCache) await cache.discard();
   }
