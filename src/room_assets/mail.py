@@ -52,6 +52,7 @@ FOLDER_REQUEST_FILE = ROOM / ".folder-request.jsonl"
 SETTINGS_REQUEST_FILE = ROOM / ".settings-request.json"
 PACK_REQUEST_FILE = ROOM / ".pack-request.jsonl"
 FETCH_REQUEST_FILE = ROOM / ".fetch-request.jsonl"
+SYNC_REQUEST_FILE = ROOM / ".sync-request.jsonl"
 BROKER_STALE_SECS = 90
 # Max body bytes emitted per `mail read` call. Kept well under the MCP client's
 # tool-result ceiling so a single part never gets clipped by the server-side
@@ -84,6 +85,14 @@ usage: mail <verb> [args]
       them when this command ends: run 'mail read <id>' in your NEXT
       command. The outcome (FETCHED / FETCH REJECTED) rides in the tool
       result.
+  mail sync [--wait-for <id-or-message-id>] [--timeout N]
+      Refresh all mailboxes from the providers when this command ends.
+      With --wait-for the broker keeps re-syncing until that message id
+      (or RFC Message-ID) is indexed, up to --timeout seconds (default 30,
+      max 45). The outcome (SYNCED / SYNC TIMEOUT) rides in the tool
+      result. Use it to confirm a sent message was reconciled or that an
+      expected reply arrived; on SYNC TIMEOUT the message may still arrive
+      later - NEVER resend because of a timeout.
   mail reply <id-or-path> <bodyfile> [--all]
       Write a threaded reply draft into the same account's Drafts. Prints
       path. The source message body must be on disk (fetch it first).
@@ -697,6 +706,9 @@ def print_message_file(p, part=1):
 
     print()
     text = body if body else body_text(msg)
+    flowed, delsp = flowed_params(msg)
+    if flowed:
+        text = unflow_text(text, delsp)
     _print_body_paginated(text, part)
 
 
@@ -809,6 +821,47 @@ def flow_format(text):
             s = stuff(wl)
             out.append(s + " " if i < len(wrapped) - 1 else s)  # flowed vs fixed
     return "\n".join(out)
+
+
+def flowed_params(msg):
+    """(flowed, delsp) of the text/plain part `mail read` displays."""
+    try:
+        part = msg.get_body(preferencelist=("plain",))
+    except Exception:
+        part = None
+    if part is None or part.get_content_type() != "text/plain":
+        return False, False
+    fmt = str(part.get_param("format", "") or "").lower()
+    delsp = str(part.get_param("delsp", "") or "").lower()
+    return fmt == "flowed", delsp == "yes"
+
+
+def unflow_text(text, delsp=False):
+    """Join RFC 3676 format=flowed soft line breaks for display (the inverse
+    of flow_format): a line ending in a space flows into the next line of the
+    same quote depth, so wrapped paragraphs read as one line instead of
+    72-column fragments with trailing spaces. The signature separator '-- '
+    is fixed by definition; space-stuffing is undone; with delsp=yes the
+    flow-marking trailing space itself is deleted when joining.
+    """
+    # [quote, content, flowed] per logical (joined) line
+    out = []
+    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = raw_line.lstrip(">")
+        quote = raw_line[: len(raw_line) - len(stripped)]
+        # one leading space is stuffing (RFC 3676 4.4); delete it
+        content = stripped[1:] if stripped.startswith(" ") else stripped
+        flowed = content.endswith(" ") and content != "-- "
+        if out and out[-1][2] and out[-1][0] == quote:
+            prev = out[-1]
+            prev[1] = (prev[1][:-1] if delsp else prev[1]) + content
+            prev[2] = flowed
+        else:
+            out.append([quote, content, flowed])
+    return "\n".join(
+        (f"{quote} {content}" if quote and content else quote + content)
+        for quote, content, _ in out
+    )
 
 
 def new_message(from_addr, to, subject, body):
@@ -1250,6 +1303,63 @@ def cmd_fetch(args):
             "FETCH REJECTED) rides in the tool result."
         )
     return NOT_FOUND if failures else OK
+
+
+SYNC_WAIT_DEFAULT_S = 30  # must match broker.ts SYNC_WAIT_DEFAULT_S
+SYNC_WAIT_MAX_S = 45  # must match broker.ts SYNC_WAIT_MAX_S
+
+
+def cmd_sync(args):
+    usage = "usage: mail sync [--wait-for <id-or-message-id>] [--timeout N]"
+    wait_for = None
+    timeout = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--wait-for":
+            if i + 1 >= len(args):
+                die(USAGE, usage)
+            wait_for = str(args[i + 1]).strip()
+            if not wait_for:
+                die(USAGE, usage)
+            i += 2
+        elif arg == "--timeout":
+            if i + 1 >= len(args):
+                die(USAGE, usage)
+            try:
+                timeout = float(args[i + 1])
+            except ValueError:
+                die(USAGE, f"mail sync: --timeout takes seconds, got {args[i + 1]!r}")
+            if timeout < 0:
+                die(USAGE, "mail sync: --timeout must be >= 0")
+            i += 2
+        else:
+            die(USAGE, usage)
+    if timeout is not None and wait_for is None:
+        die(USAGE, "mail sync: --timeout only makes sense with --wait-for")
+    request = {"ts": now_iso()}
+    if wait_for:
+        request["wait_for"] = wait_for
+    if timeout is not None:
+        request["timeout"] = timeout
+    append_jsonl(SYNC_REQUEST_FILE, request)
+    if wait_for:
+        effective = min(
+            timeout if timeout is not None else SYNC_WAIT_DEFAULT_S, SYNC_WAIT_MAX_S
+        )
+        print(
+            f"SYNC queued: when this command ends the broker re-syncs until "
+            f"{wait_for} is indexed, up to {effective:g}s. The outcome "
+            "(SYNCED / SYNC TIMEOUT) rides in the tool result. On SYNC TIMEOUT "
+            "the message may still arrive later - NEVER resend because of a "
+            "timeout."
+        )
+    else:
+        print(
+            "SYNC queued: the broker refreshes all mailboxes when this command "
+            "ends. The outcome (SYNCED) rides in the tool result."
+        )
+    return OK
 
 
 def _resolve_reply_recipients(src_msg, account_addr):
@@ -2967,6 +3077,7 @@ VERBS = {
     "read": cmd_read,
     "search": cmd_search,
     "fetch": cmd_fetch,
+    "sync": cmd_sync,
     "reply": cmd_reply,
     "compose": cmd_compose,
     "send": cmd_send,

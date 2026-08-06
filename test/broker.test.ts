@@ -20,6 +20,7 @@ async function makeBroker(
     dryRun?: boolean;
     detectProvider?: BrokerOptions["detectProvider"];
     draftUploaders?: BrokerOptions["draftUploaders"];
+    sentCopyFetchers?: BrokerOptions["sentCopyFetchers"];
     hostSettingsProbe?: BrokerOptions["hostSettingsProbe"];
   } = {},
 ): Promise<Broker> {
@@ -34,6 +35,11 @@ async function makeBroker(
       microsoft: async () => "<mid-m>",
     },
     ...(opts.draftUploaders ? { draftUploaders: opts.draftUploaders } : {}),
+    sentCopyFetchers: opts.sentCopyFetchers ?? {
+      gmail: async () => null,
+      microsoft: async () => null,
+    },
+    sentCopyRetryDelayMs: 0,
     detectProvider: opts.detectProvider ?? (async () => null),
     // default: a host with no settings store — tests never probe the real
     // Claude Desktop directories of the machine they run on
@@ -208,6 +214,43 @@ describe("boundary broker", () => {
     });
     broker.close();
   });
+  it("sweeps a Sent/cur send leftover once its provider copy is indexed", async () => {
+    const broker = await makeBroker();
+    await broker.runCycle({ syncNetwork: false });
+    const sentCur = path.join(
+      broker.layout.accounts,
+      "a@gmail.com",
+      "mail",
+      "Sent",
+      "cur",
+    );
+    fs.mkdirSync(sentCur, { recursive: true });
+    // the meta-less leftover finishSend leaves behind
+    const leftover = path.join(sentCur, "100.deadbeef0001.eml");
+    fs.writeFileSync(
+      leftover,
+      sampleEml({ messageId: "<swept-1@example.com>" }),
+    );
+    // the provider's indexed copy of the same Message-ID (INBOX: the
+    // self-addressed case where no Sent-folder store ever happens)
+    const { storeMessage } = await import("../src/store.js");
+    await storeMessage(broker.layout, broker.index, broker.ledger, {
+      account: "a@gmail.com",
+      folder: "INBOX",
+      raw: sampleEml({
+        messageId: "<swept-1@example.com>",
+        extraHeaders: ["X-Provider: added"],
+      }),
+    });
+    await broker.runCycle({ syncNetwork: false });
+    expect(fs.existsSync(leftover)).toBe(false);
+    const dedupes = broker.ledger
+      .readAll()
+      .filter((r) => r.op === "sent_draft_deduped");
+    expect(dedupes).toHaveLength(1);
+    broker.close();
+  });
+
   it("bootstraps account trees and publishes status on a cycle", async () => {
     const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false });
@@ -856,6 +899,90 @@ describe("boundary broker", () => {
     const outcomes = await broker.pushReport();
     expect(outcomes[0]).toContain("SENT");
     expect(outcomes[0]).toContain("microsoft");
+    broker.close();
+  });
+
+  it("indexes the provider Sent copy in the send's own push cycle and sweeps the leftover", async () => {
+    // the fake deliverer reports Message-ID <mid-g>; the draft carries the
+    // same id so the fetched provider copy reconciles the moved draft
+    const providerCopy = sampleEml({
+      from: "a@gmail.com",
+      to: "a@gmail.com",
+      messageId: "<mid-g>",
+      extraHeaders: ["X-Provider: added-on-delivery"],
+    });
+    const fetched: string[] = [];
+    const broker = await makeBroker({
+      dryRun: false,
+      sentCopyFetchers: {
+        gmail: async (_acct, messageId) => {
+          fetched.push(messageId);
+          return { raw: providerCopy, providerMsgId: "g-777" };
+        },
+        microsoft: async () => null,
+      },
+    });
+    await broker.runCycle({ syncNetwork: false });
+    queueSend(
+      broker.layout,
+      "a@gmail.com",
+      sampleEml({
+        from: "a@gmail.com",
+        to: "a@gmail.com",
+        messageId: "<mid-g>",
+      }),
+    );
+
+    const outcomes = await broker.pushReport();
+    expect(outcomes[0]).toContain("SENT");
+    expect(fetched).toEqual(["<mid-g>"]);
+    // the sent message is indexed within the same push cycle
+    expect(broker.index.hasRfcMessageId("a@gmail.com", "<mid-g>")).toBe(true);
+    // Sent/cur holds exactly the provider copy (.eml + .meta), no leftover
+    const sentCur = path.join(
+      broker.layout.accounts,
+      "a@gmail.com",
+      "mail",
+      "Sent",
+      "cur",
+    );
+    const emls = fs.readdirSync(sentCur).filter((n) => n.endsWith(".eml"));
+    expect(emls).toHaveLength(1);
+    expect(fs.existsSync(path.join(sentCur, emls[0] + ".meta"))).toBe(true);
+    expect(
+      broker.ledger.readAll().filter((r) => r.op === "sent_draft_deduped"),
+    ).toHaveLength(1);
+    broker.close();
+  });
+
+  it("keeps the moved draft when the provider Sent copy is not available yet", async () => {
+    const broker = await makeBroker({ dryRun: false }); // fetchers return null
+    await broker.runCycle({ syncNetwork: false });
+    queueSend(
+      broker.layout,
+      "a@gmail.com",
+      sampleEml({
+        from: "a@gmail.com",
+        to: "a@gmail.com",
+        messageId: "<mid-g>",
+      }),
+    );
+
+    const outcomes = await broker.pushReport();
+    expect(outcomes[0]).toContain("SENT");
+    const sentCur = path.join(
+      broker.layout.accounts,
+      "a@gmail.com",
+      "mail",
+      "Sent",
+      "cur",
+    );
+    const emls = fs.readdirSync(sentCur).filter((n) => n.endsWith(".eml"));
+    expect(emls).toHaveLength(1); // the moved draft, kept for the next sync
+    expect(fs.existsSync(path.join(sentCur, emls[0] + ".meta"))).toBe(false);
+    expect(
+      broker.ledger.readAll().filter((r) => r.op === "sent_draft_deduped"),
+    ).toEqual([]);
     broker.close();
   });
 });

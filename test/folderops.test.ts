@@ -591,6 +591,188 @@ describe("graph setReadState", () => {
   });
 });
 
+// ---- duplicate Message-IDs (SAT-1 regression) ------------------------
+//
+// A self-cc'd/self-bcc'd Graph send exists as TWO provider items with the
+// SAME internetMessageId — the Sent Items copy and the Inbox copy — and
+// Graph's stable result order can put the Sent copy first. Resolving with
+// value[0] acted on an arbitrary copy: `mail archive` reported "applied"
+// while the inbox copy never moved, retries oscillated the SAME Sent copy in
+// and out of the inbox, and the local mirror diverged silently and
+// permanently (SAT-1, qa_acceptance_070826.md).
+
+/** Fake Graph transport where one Message-ID matches several items. */
+function fakeGraphMulti(
+  items: Array<{ id: string; parentFolderId: string; isRead?: boolean }>,
+) {
+  const requests: string[] = [];
+  const moved: string[] = [];
+  const patched: string[] = [];
+  const requestFn: RequestFn = async (method, url, _token, _opts) => {
+    requests.push(`${method} ${url}`);
+    if (method === "GET" && url.includes("/me/messages?")) {
+      return {
+        status: 200,
+        body: Buffer.from(JSON.stringify({ value: items })),
+      };
+    }
+    if (method === "GET" && url.includes("/me/mailFolders/archive")) {
+      return {
+        status: 200,
+        body: Buffer.from(JSON.stringify({ id: "arch-id" })),
+      };
+    }
+    if (method === "GET" && url.includes("/me/mailFolders/inbox")) {
+      return {
+        status: 200,
+        body: Buffer.from(JSON.stringify({ id: "inbox-id" })),
+      };
+    }
+    const moveOf = /\/me\/messages\/([^/]+)\/move$/.exec(url);
+    if (method === "POST" && moveOf) {
+      moved.push(moveOf[1]!);
+      return {
+        status: 201,
+        body: Buffer.from(JSON.stringify({ id: `${moveOf[1]}-moved` })),
+      };
+    }
+    const patchOf = /\/me\/messages\/([^/]+)$/.exec(url);
+    if (method === "PATCH" && patchOf) {
+      patched.push(patchOf[1]!);
+      return { status: 200, body: Buffer.from("{}") };
+    }
+    throw new Error(`unexpected request: ${method} ${url}`);
+  };
+  return { requests, moved, patched, requestFn };
+}
+
+const SENT_COPY = { id: "sent-copy", parentFolderId: "sent-id" };
+const INBOX_COPY = { id: "inbox-copy", parentFolderId: "inbox-id" };
+const ARCHIVE_COPY = { id: "arch-copy", parentFolderId: "arch-id" };
+
+describe("graph folder ops when one Message-ID matches several items (SAT-1)", () => {
+  const graphOpts = (requestFn: RequestFn) => ({
+    requestFn,
+    getToken: async () => "tok",
+  });
+
+  it("archive moves the inbox copy, not Graph's first match (the Sent copy)", async () => {
+    const layout = makeLayout();
+    const { moved, requestFn } = fakeGraphMulti([SENT_COPY, INBOX_COPY]);
+    const result = await moveMessage(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, target: "archive" },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("applied");
+    expect(moved).toEqual(["inbox-copy"]); // the Sent copy stays put
+  });
+
+  it("re-archive after the inbox copy already moved is a noop; the Sent copy never oscillates", async () => {
+    const layout = makeLayout();
+    const { moved, requestFn } = fakeGraphMulti([SENT_COPY, ARCHIVE_COPY]);
+    const result = await moveMessage(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, target: "archive" },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("noop");
+    expect(moved).toEqual([]);
+  });
+
+  it("unarchive with the message already in the inbox is a noop, never dragging the Sent copy in", async () => {
+    const layout = makeLayout();
+    const { moved, requestFn } = fakeGraphMulti([SENT_COPY, INBOX_COPY]);
+    const result = await moveMessage(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, target: "inbox" },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("noop");
+    expect(moved).toEqual([]);
+  });
+
+  it("refuses a blind pick when no copy is in the op's source or target folder", async () => {
+    const layout = makeLayout();
+    const stray = { id: "stray", parentFolderId: "other-id" };
+    const { moved, requestFn } = fakeGraphMulti([SENT_COPY, stray]);
+    await expect(
+      moveMessage(
+        layout,
+        MS_ACCT,
+        { internetMessageId: MSG_ID, target: "archive" },
+        graphOpts(requestFn),
+      ),
+    ).rejects.toThrow(Rejection);
+    expect(moved).toEqual([]);
+  });
+
+  it("still archives a LONE copy that a rule moved to some other folder", async () => {
+    const layout = makeLayout();
+    const stray = { id: "stray", parentFolderId: "other-id" };
+    const { moved, requestFn } = fakeGraphMulti([stray]);
+    const result = await moveMessage(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, target: "archive" },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("applied");
+    expect(moved).toEqual(["stray"]);
+  });
+
+  it("mark-read reaches the unread inbox copy behind an already-read Sent copy", async () => {
+    const layout = makeLayout();
+    const { patched, requestFn } = fakeGraphMulti([
+      { ...SENT_COPY, isRead: true },
+      { ...INBOX_COPY, isRead: false },
+    ]);
+    const result = await graphSetReadState(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, isRead: true },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("applied");
+    expect(patched).toEqual(["inbox-copy"]); // the Sent copy already agrees
+  });
+
+  it("mark-unread returns EVERY copy to unread, not an arbitrary one", async () => {
+    const layout = makeLayout();
+    const { patched, requestFn } = fakeGraphMulti([
+      { ...SENT_COPY, isRead: true },
+      { ...INBOX_COPY, isRead: true },
+    ]);
+    const result = await graphSetReadState(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, isRead: false },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("applied");
+    expect(patched.sort()).toEqual(["inbox-copy", "sent-copy"]);
+  });
+
+  it("mark-read is a noop only when every copy is already read", async () => {
+    const layout = makeLayout();
+    const { patched, requestFn } = fakeGraphMulti([
+      { ...SENT_COPY, isRead: true },
+      { ...INBOX_COPY, isRead: true },
+    ]);
+    const result = await graphSetReadState(
+      layout,
+      MS_ACCT,
+      { internetMessageId: MSG_ID, isRead: true },
+      graphOpts(requestFn),
+    );
+    expect(result).toBe("noop");
+    expect(patched).toEqual([]);
+  });
+});
+
 /** Fake Graph transport for drafts: create + drafts-scoped find + move. */
 function fakeGraphDrafts(state: { draftFound: boolean }) {
   const requests: string[] = [];

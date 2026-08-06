@@ -1415,6 +1415,62 @@ class PerVerbHelpTests(MailCliTestBase):
         self.assertIn("unknown argument", proc.stderr)
 
 
+class SyncVerbTests(MailCliTestBase):
+    """`mail sync` queues room/.sync-request.jsonl for the broker's boundary
+    cycle; --wait-for / --timeout ride in the request and the outcome
+    (SYNCED / SYNC TIMEOUT) comes back through send_results."""
+
+    def request_lines(self):
+        p = self.room / ".sync-request.jsonl"
+        self.assertTrue(p.is_file(), "sync request file missing")
+        return [
+            json.loads(l)
+            for l in p.read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+
+    def test_bare_sync_queues_a_request(self):
+        proc = self.run_mail("sync", expect_code=0)
+        self.assertIn("SYNC queued", proc.stdout)
+        (req,) = self.request_lines()
+        self.assertIn("ts", req)
+        self.assertNotIn("wait_for", req)
+
+    def test_wait_for_and_timeout_ride_in_the_request(self):
+        proc = self.run_mail(
+            "sync", "--wait-for", "<m-1@x>", "--timeout", "10", expect_code=0
+        )
+        self.assertIn("SYNC queued", proc.stdout)
+        self.assertIn("NEVER resend", proc.stdout)
+        (req,) = self.request_lines()
+        self.assertEqual(req["wait_for"], "<m-1@x>")
+        self.assertEqual(req["timeout"], 10)
+
+    def test_requests_append_so_one_command_can_queue_several(self):
+        self.run_mail("sync", expect_code=0)
+        self.run_mail("sync", "--wait-for", "abc123abc123", expect_code=0)
+        self.assertEqual(len(self.request_lines()), 2)
+
+    def test_timeout_without_wait_for_is_a_usage_error(self):
+        proc = self.run_mail("sync", "--timeout", "5", expect_code=1)
+        self.assertIn("--wait-for", proc.stderr)
+        self.assertFalse((self.room / ".sync-request.jsonl").exists())
+
+    def test_non_numeric_timeout_is_a_usage_error(self):
+        proc = self.run_mail(
+            "sync", "--wait-for", "x", "--timeout", "soon", expect_code=1
+        )
+        self.assertIn("--timeout", proc.stderr)
+
+    def test_unknown_argument_is_a_usage_error(self):
+        self.run_mail("sync", "now", expect_code=1)
+
+    def test_verb_help(self):
+        proc = self.run_mail("sync", "--help", expect_code=0)
+        self.assertIn("mail sync", proc.stdout)
+        self.assertIn("--wait-for", proc.stdout)
+
+
 class ReadHeaderDisplayTests(MailCliTestBase):
     def test_folded_rfc2047_subject_displays_with_single_space(self):
         """QA 2026-08-06, F5: Graph folds long RFC 2047 subjects onto a
@@ -1542,6 +1598,133 @@ class ReadPaginationTests(MailCliTestBase):
         src = self._inbound_with_body("short")
         proc = self.run_mail("read", self.rel(src), "--part", "abc")
         self.assertEqual(proc.returncode, 1)  # USAGE
+
+
+class ReadFlowedBodyTests(MailCliTestBase):
+    """`mail read` reflows RFC 3676 format=flowed text/plain bodies for
+    display: soft-broken lines (trailing space + continuation) are joined,
+    honoring DelSp, so received text has no mid-sentence breaks. Display-only
+    — the .eml on disk keeps its wire format."""
+
+    ACCT = "me@adeu.ai"
+
+    def _flowed_eml(self, body_lines, content_type, filename="600.f10e.eml"):
+        raw = (
+            "From: sender@vendor.com\r\n"
+            f"To: {self.ACCT}\r\n"
+            "Subject: flowed\r\n"
+            "Date: Mon, 06 Jul 2026 10:00:00 +0000\r\n"
+            "Message-ID: <flowed-1@x.com>\r\n"
+            "MIME-Version: 1.0\r\n"
+            f"Content-Type: {content_type}\r\n"
+            "\r\n" + "\r\n".join(body_lines) + "\r\n"
+        )
+        return self.write_inbound(self.ACCT, filename, raw)
+
+    def _body_lines(self, stdout):
+        after_headers = stdout.split("\n\n", 1)[1]
+        return after_headers.rstrip("\n").split("\n")
+
+    def test_soft_broken_lines_join_into_one_paragraph(self):
+        src = self._flowed_eml(
+            [
+                "This sentence was wrapped ",
+                "at the flow boundary and ",
+                "continues here.",
+                "",
+                "Second paragraph.",
+            ],
+            'text/plain; charset="utf-8"; format=flowed',
+        )
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        lines = self._body_lines(proc.stdout)
+        self.assertIn(
+            "This sentence was wrapped at the flow boundary and continues here.",
+            lines,
+        )
+        self.assertIn("Second paragraph.", lines)
+
+    def test_delsp_yes_joins_without_the_marker_space(self):
+        src = self._flowed_eml(
+            ["unbro ", "ken word split"],
+            'text/plain; charset="utf-8"; format=flowed; delsp=yes',
+        )
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        self.assertIn("unbroken word split", self._body_lines(proc.stdout))
+
+    def test_signature_separator_stays_fixed(self):
+        src = self._flowed_eml(
+            ["Bye.", "-- ", "Alice"],
+            'text/plain; charset="utf-8"; format=flowed',
+        )
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        lines = self._body_lines(proc.stdout)
+        self.assertIn("Alice", lines)
+        self.assertNotIn("-- Alice", "\n".join(lines))
+
+    def test_quoted_flow_joins_within_the_same_depth(self):
+        src = self._flowed_eml(
+            ["> quoted text that ", "> flows on", "reply text"],
+            'text/plain; charset="utf-8"; format=flowed',
+        )
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        lines = self._body_lines(proc.stdout)
+        self.assertIn("> quoted text that flows on", lines)
+        self.assertIn("reply text", lines)
+
+    def test_non_flowed_bodies_keep_their_line_breaks(self):
+        src = self._flowed_eml(
+            ["line one ", "line two"],
+            'text/plain; charset="utf-8"',
+        )
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        lines = self._body_lines(proc.stdout)
+        self.assertIn("line two", lines)
+        self.assertNotIn("line one line two", "\n".join(lines))
+
+    def test_meta_sidecar_body_is_reflowed_too(self):
+        # the broker's .meta body preserves the flowed trailing spaces; the
+        # content-type comes from the .eml beside it
+        src = self._flowed_eml(
+            ["ignored on disk"],
+            'text/plain; charset="utf-8"; format=flowed',
+        )
+        meta = (
+            "X-Messageoperator-Sha: abc123abc123\n"
+            f"X-Messageoperator-Account: {self.ACCT}\n"
+            "\n"
+            "From the sidecar, wrapped \n"
+            "and joined.\n"
+        )
+        src.with_name(src.name + ".meta").write_text(meta, encoding="utf-8")
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        self.assertIn(
+            "From the sidecar, wrapped and joined.",
+            self._body_lines(proc.stdout),
+        )
+
+    def test_compose_wire_format_round_trips_through_read(self):
+        # a draft is written flowed at 72 cols; `mail read` must show the
+        # original paragraph again
+        self.account_dir(self.ACCT)
+        paragraph = (
+            "The quarterly figures look strong and I would like to schedule a "
+            "call next week to walk through the renewal terms before the "
+            "contract deadline on Friday."
+        )
+        body = self.room / "flowbody.txt"
+        body.write_text(paragraph + "\n", encoding="utf-8")
+        proc = self.run_mail(
+            "compose",
+            self.ACCT,
+            "to@example.com",
+            "renewal",
+            self.rel(body),
+            expect_code=0,
+        )
+        draft_rel = proc.stdout.strip().splitlines()[0]
+        read = self.run_mail("read", draft_rel, expect_code=0)
+        self.assertIn(paragraph, self._body_lines(read.stdout))
 
 
 class DraftVerbTests(MailCliTestBase):

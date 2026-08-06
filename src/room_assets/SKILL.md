@@ -341,11 +341,24 @@ or `REJECTED (reason)` (draft returned with a `.rejected.txt`). The same
 field carries FETCHED / ARCHIVED / MARKED READ / MARKED UNREAD / PACKED
 outcomes for the other queued verbs.
 
-**A SENT message may not appear in `mail index`/`mail search` for a few
-commands** — it only shows up once the provider's own Sent copy syncs back.
-NEVER resend because a search came back empty: `send_results: SENT` means the
-mail was delivered, and sending again creates a real duplicate email in the
+**A SENT message is usually searchable in your next command**: right after
+delivery the broker fetches the provider's own Sent copy and indexes it. When
+the provider is slow to materialize that copy, the message may still be
+missing from `mail index`/`mail search` for a few commands. NEVER resend
+because a search came back empty: `send_results: SENT` means the mail was
+delivered, and sending again creates a real duplicate email in the
 recipient's inbox. To verify a send, trust `send_results` — not a search.
+
+**To wait for sync deterministically, use `mail sync`.** Bare `mail sync`
+forces a provider refresh when the command ends;
+`mail sync --wait-for '<message-id>' [--timeout N]` keeps re-syncing until
+that id (a `mail index` id or an RFC Message-ID) is indexed, up to N seconds
+(default 30, max 45). The outcome rides in `send_results`: `SYNCED` when the
+message is indexed, `SYNC TIMEOUT` when the wait lapsed — a timeout means
+"not indexed YET", never "the send failed", so it is still no reason to
+resend. This is the right tool both for confirming a send's Sent copy and
+for polling for an expected reply, instead of burning commands on repeated
+searches.
 
 ## Auth is lazy — relay it honestly
 

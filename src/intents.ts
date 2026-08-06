@@ -70,6 +70,12 @@ export interface DraftDeleters {
   ) => Promise<"applied" | "noop">;
 }
 
+/** One live delivery this cycle: the channel account and the Message-ID. */
+export interface ExecutedSend {
+  account: string;
+  messageId: string;
+}
+
 export async function processOutboxes(
   layout: Layout,
   index: Index,
@@ -84,8 +90,9 @@ export async function processOutboxes(
   // address and immediately mail to it. Defaults to all configured accounts
   // for direct/unit use.
   authenticatedOwn?: Set<string>,
-): Promise<void> {
+): Promise<ExecutedSend[]> {
   const own = authenticatedOwn ?? ownAddresses(cfg);
+  const executed: ExecutedSend[] = [];
   for (const address of layout.accountAddresses()) {
     const outboxNew = path.join(
       layout.accounts,
@@ -112,7 +119,7 @@ export async function processOutboxes(
     }
     for (const intentPath of listSorted(outboxNew, ".intent.json")) {
       try {
-        await processIntent(
+        const send = await processIntent(
           layout,
           ledger,
           cfg,
@@ -122,6 +129,7 @@ export async function processOutboxes(
           deliverers,
           own,
         );
+        if (send) executed.push(send);
       } catch (err) {
         log.error(
           `intent ${path.basename(intentPath)} failed unexpectedly: ${err}`,
@@ -134,6 +142,7 @@ export async function processOutboxes(
       log.error(`orphan sweep of ${outboxNew} failed: ${err}`);
     }
   }
+  return executed;
 }
 
 function listSorted(dir: string, suffix: string): string[] {
@@ -167,7 +176,7 @@ async function processIntent(
   explained: Set<string>,
   deliverers: Deliverers,
   own: Set<string>,
-): Promise<void> {
+): Promise<ExecutedSend | null> {
   const draftName = path.basename(intentPath).replace(/\.intent\.json$/, "");
   const draftPath = path.join(path.dirname(intentPath), draftName);
   const acctMail = path.join(layout.accounts, accountDirName, "mail");
@@ -197,7 +206,7 @@ async function processIntent(
       explained,
     );
     fs.rmSync(intentPath, { force: true });
-    return;
+    return null;
   }
 
   const shaExpected = String(intent.sha256_12 ?? "");
@@ -219,7 +228,7 @@ async function processIntent(
       { sha: shaExpected },
     );
     fs.rmSync(intentPath, { force: true });
-    return;
+    return null;
   }
 
   try {
@@ -301,6 +310,7 @@ async function processIntent(
         explained,
         mime,
       );
+      return { account: acct.address, messageId };
     }
   } catch (err) {
     if (!(err instanceof Rejection)) throw err;
@@ -312,6 +322,7 @@ async function processIntent(
     returnDraft(layout, acctMail, draftPath, draftName, err.detail, explained);
     fs.rmSync(intentPath, { force: true });
   }
+  return null;
 }
 
 // ---- provider drafts (DraftBox) --------------------------------------

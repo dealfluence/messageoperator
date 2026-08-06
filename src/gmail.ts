@@ -988,6 +988,56 @@ export async function sendMime(
   });
 }
 
+/**
+ * The provider's own Sent copy of a just-delivered message, fetched by RFC
+ * Message-ID so the send's push cycle can index it immediately instead of
+ * waiting for the next folder sync. Returns null when the copy has not
+ * materialized yet (or the account cannot authenticate) — the regular sync
+ * picks it up later.
+ */
+export async function fetchSentCopy(
+  layout: Layout,
+  index: Index,
+  cfg: Config,
+  acct: AccountConfig,
+  messageId: string,
+  opts: GmailSyncOptions = {},
+): Promise<{ raw: Buffer; providerMsgId?: string; labels?: string[] } | null> {
+  const getPassword = opts.getPassword ?? gmailAppPassword;
+  const password = await getPassword(layout, cfg, acct.address);
+  if (!password || !/^[\x00-\x7f]*$/.test(password)) return null;
+  const factory = opts.clientFactory ?? defaultClientFactory;
+  const ownsCache = !opts.connCache;
+  const cache = opts.connCache ?? new ConnectionCache();
+  try {
+    const client = await cache.get(acct.address, password, factory);
+    const [sentName] = await sentFolder(client, index, acct.address);
+    const uids = await findByMessageId(client, sentName, messageId, {
+      readOnly: true,
+    });
+    const uid = uids[0];
+    if (uid === undefined) return null;
+    for await (const msg of client.fetch(
+      [uid],
+      { source: true, emailId: true, labels: true },
+      { uid: true },
+    )) {
+      if (!msg.source) continue;
+      return {
+        raw: msg.source,
+        providerMsgId: msg.emailId ? String(msg.emailId) : undefined,
+        labels: msg.labels ? gmailLabelsToTags(msg.labels) : undefined,
+      };
+    }
+    return null;
+  } catch (err) {
+    await cache.discard(acct.address); // connection may be broken; reconnect next use
+    throw err;
+  } finally {
+    if (ownsCache) await cache.discard();
+  }
+}
+
 // ---- folder changes (archive / move) --------------------------------
 //
 // The provider-abstracted folder-change primitive, Gmail side. Gmail models

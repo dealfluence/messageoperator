@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { sha12 } from "../src/layout.js";
-import { sanitizeFilename, storeMessage } from "../src/store.js";
+import {
+  sanitizeFilename,
+  storeMessage,
+  sweepSentDraftLeftovers,
+} from "../src/store.js";
 import {
   emlWithAttachments,
   makeIndex,
@@ -441,49 +445,52 @@ describe("storeMessage", () => {
   });
 
   /**
-   * QA 2026-08-06, F3: an accepted send leaves the moved draft in Sent/cur
-   * (finishSend, no .meta, never indexed); when the provider's own Sent copy
-   * syncs in (same Message-ID, different bytes), the draft copy must go, or
-   * every filesystem-level script double-counts sent mail.
+   * An accepted send leaves the moved draft in Sent/cur (finishSend, no
+   * .meta, never indexed); once the provider's own copy of the Message-ID is
+   * indexed with a body on disk, the leftover must go, or every
+   * filesystem-level script double-counts sent mail. The provider copy may
+   * land in Sent OR in INBOX (a self-addressed Gmail message is ONE copy
+   * labeled Sent+Inbox, homed to INBOX), and leftovers from earlier broker
+   * runs must be swept too — hence a per-cycle sweep, not a store trigger.
    */
-  describe("sent draft dedupe", () => {
+  describe("sweepSentDraftLeftovers", () => {
     const MSG_ID = "<sent-42@example.com>";
+    const ACCOUNT = "a@example.com";
 
     function sentCurDir(layout: ReturnType<typeof makeLayout>) {
-      const dir = path.join(
-        layout.accounts,
-        "a@example.com",
-        "mail",
-        "Sent",
-        "cur",
-      );
+      const dir = path.join(layout.accounts, ACCOUNT, "mail", "Sent", "cur");
       fs.mkdirSync(dir, { recursive: true });
       return dir;
     }
 
-    it("removes the meta-less moved draft when the synced copy lands", async () => {
+    /** What finishSend leaves behind: the draft bytes, no .meta. */
+    function writeLeftover(dir: string, raw: Buffer): string {
+      const p = path.join(dir, `100.${sha12(raw)}.eml`);
+      fs.writeFileSync(p, raw);
+      return p;
+    }
+
+    it("removes the leftover once the provider's Sent copy is indexed", async () => {
       const layout = makeLayout();
       const index = makeIndex(layout);
       const ledger = makeLedger(layout);
       const dir = sentCurDir(layout);
-      // what finishSend leaves behind: the draft bytes, no .meta
-      const draftRaw = sampleEml({ messageId: MSG_ID, subject: "deal" });
-      const draftPath = path.join(dir, `100.${sha12(draftRaw)}.eml`);
-      fs.writeFileSync(draftPath, draftRaw);
+      const draftPath = writeLeftover(
+        dir,
+        sampleEml({ messageId: MSG_ID, subject: "deal" }),
+      );
       // the provider's copy: same Message-ID, provider-added header -> new sha
-      const syncedRaw = sampleEml({
-        messageId: MSG_ID,
-        subject: "deal",
-        extraHeaders: ["X-Provider: added-on-delivery"],
+      const dest = await storeMessage(layout, index, ledger, {
+        account: ACCOUNT,
+        folder: "Sent",
+        raw: sampleEml({
+          messageId: MSG_ID,
+          subject: "deal",
+          extraHeaders: ["X-Provider: added-on-delivery"],
+        }),
       });
       const explained = new Set<string>();
-      const dest = await storeMessage(layout, index, ledger, {
-        account: "a@example.com",
-        folder: "Sent",
-        raw: syncedRaw,
-        explained,
-      });
-      expect(dest).not.toBeNull();
+      sweepSentDraftLeftovers(layout, index, ledger, ACCOUNT, explained);
       expect(fs.existsSync(draftPath)).toBe(false);
       expect(fs.existsSync(dest!)).toBe(true);
       const dedupes = ledger
@@ -493,20 +500,75 @@ describe("storeMessage", () => {
       expect(explained.has(layout.rel(draftPath))).toBe(true);
     });
 
-    it("leaves meta-less files with a different Message-ID alone", async () => {
+    it("removes the leftover when the provider copy landed in INBOX (self-addressed send)", async () => {
       const layout = makeLayout();
       const index = makeIndex(layout);
       const ledger = makeLedger(layout);
       const dir = sentCurDir(layout);
-      const otherRaw = sampleEml({ messageId: "<other-7@example.com>" });
-      const otherPath = path.join(dir, `100.${sha12(otherRaw)}.eml`);
-      fs.writeFileSync(otherPath, otherRaw);
+      const draftPath = writeLeftover(
+        dir,
+        sampleEml({ messageId: MSG_ID, subject: "note to self" }),
+      );
+      const dest = await storeMessage(layout, index, ledger, {
+        account: ACCOUNT,
+        folder: "INBOX",
+        raw: sampleEml({
+          messageId: MSG_ID,
+          subject: "note to self",
+          extraHeaders: ["X-Provider: added-on-delivery"],
+        }),
+      });
+      sweepSentDraftLeftovers(layout, index, ledger, ACCOUNT);
+      expect(fs.existsSync(draftPath)).toBe(false);
+      expect(fs.existsSync(dest!)).toBe(true);
+      const dedupes = ledger
+        .readAll()
+        .filter((r) => r.op === "sent_draft_deduped");
+      expect(dedupes).toHaveLength(1);
+    });
+
+    it("keeps the leftover while its Message-ID is not indexed", async () => {
+      const layout = makeLayout();
+      const index = makeIndex(layout);
+      const ledger = makeLedger(layout);
+      const dir = sentCurDir(layout);
+      const otherPath = writeLeftover(
+        dir,
+        sampleEml({ messageId: "<other-7@example.com>" }),
+      );
       await storeMessage(layout, index, ledger, {
-        account: "a@example.com",
+        account: ACCOUNT,
         folder: "Sent",
         raw: sampleEml({ messageId: MSG_ID }),
       });
+      sweepSentDraftLeftovers(layout, index, ledger, ACCOUNT);
       expect(fs.existsSync(otherPath)).toBe(true);
+    });
+
+    it("ignores metadata-only rows: the leftover is the only local copy", () => {
+      const layout = makeLayout();
+      const index = makeIndex(layout);
+      const ledger = makeLedger(layout);
+      const dir = sentCurDir(layout);
+      const draftPath = writeLeftover(dir, sampleEml({ messageId: MSG_ID }));
+      index.insertMessage({
+        sha: "gm:g42",
+        account: ACCOUNT,
+        folder: "Sent",
+        filename: "",
+        path: "",
+        date: "",
+        epoch: 5,
+        from: `me <${ACCOUNT}>`,
+        to: "peer@example.com",
+        subject: "deal",
+        body: "",
+        gmailId: "g42",
+        rfcMessageId: MSG_ID,
+        metaOnly: true,
+      });
+      sweepSentDraftLeftovers(layout, index, ledger, ACCOUNT);
+      expect(fs.existsSync(draftPath)).toBe(true);
     });
 
     it("never removes an indexed (.meta-bearing) message", async () => {
@@ -519,14 +581,35 @@ describe("storeMessage", () => {
       fs.writeFileSync(keptPath, keptRaw);
       fs.writeFileSync(keptPath + ".meta", "X-Messageoperator-Sha: x\n\n\n");
       await storeMessage(layout, index, ledger, {
-        account: "a@example.com",
+        account: ACCOUNT,
         folder: "Sent",
         raw: sampleEml({
           messageId: MSG_ID,
           extraHeaders: ["X-Provider: added"],
         }),
       });
+      sweepSentDraftLeftovers(layout, index, ledger, ACCOUNT);
       expect(fs.existsSync(keptPath)).toBe(true);
+    });
+
+    it("sweeps leftovers whose provider copy was indexed in an earlier run", async () => {
+      const layout = makeLayout();
+      const index = makeIndex(layout);
+      const ledger = makeLedger(layout);
+      const dir = sentCurDir(layout);
+      // provider copy indexed first; the leftover appears afterwards (an
+      // existing mailbox carrying leftovers no store event will ever match)
+      await storeMessage(layout, index, ledger, {
+        account: ACCOUNT,
+        folder: "Sent",
+        raw: sampleEml({
+          messageId: MSG_ID,
+          extraHeaders: ["X-Provider: added"],
+        }),
+      });
+      const draftPath = writeLeftover(dir, sampleEml({ messageId: MSG_ID }));
+      sweepSentDraftLeftovers(layout, index, ledger, ACCOUNT);
+      expect(fs.existsSync(draftPath)).toBe(false);
     });
   });
 

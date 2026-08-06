@@ -58,7 +58,11 @@ import { Ledger, type LedgerRecord } from "./ledger.js";
 import { log } from "./log.js";
 import * as msgraph from "./msgraph.js";
 import { asViewFile, packDocx } from "./pack.js";
-import { storeFetchedBody } from "./store.js";
+import {
+  storeFetchedBody,
+  storeMessage,
+  sweepSentDraftLeftovers,
+} from "./store.js";
 import { detectProvider } from "./provider.js";
 import * as snapshot from "./snapshot.js";
 import { Index } from "./state.js";
@@ -74,7 +78,13 @@ const FOLDER_REQUEST_FILE = ".folder-request.jsonl"; // in room/, written by `ma
 const PACK_REQUEST_FILE = ".pack-request.jsonl"; // in room/, written by `mail pack`
 const FETCH_REQUEST_FILE = ".fetch-request.jsonl"; // in room/, written by `mail fetch`
 const SETTINGS_REQUEST_FILE = ".settings-request.json"; // in room/, written by `mail settings`
+const SYNC_REQUEST_FILE = ".sync-request.jsonl"; // in room/, written by `mail sync`
 const PENDING_REMOVALS_FILE = "pending-removals.json"; // in broker/, written from the settings page
+
+/** `mail sync --wait-for` defaults; capped so a wait can never outlive the
+ * host's own tool-call timeout. */
+export const SYNC_WAIT_DEFAULT_S = 30;
+export const SYNC_WAIT_MAX_S = 45;
 
 /** "archive" -> "ARCHIVE", "mark_read" -> "MARK READ": the imperative form. */
 function folderOpWord(op: string): string {
@@ -112,6 +122,9 @@ export function sendOutcomeLines(records: LedgerRecord[]): string[] {
       docx?: string;
       edits_applied?: number;
       message_id?: string;
+      wait_for?: string;
+      waited_s?: number;
+      timeout_s?: number;
     };
     const sha = record.sha ?? "?";
     const recipients = (details.recipients ?? []).join(", ") || "?";
@@ -205,6 +218,23 @@ export function sendOutcomeLines(records: LedgerRecord[]): string[] {
       lines.push(
         `FETCH REJECTED (${details.reason ?? "?"}): ${details.detail ?? ""}`,
       );
+    } else if (record.op === "sync_executed") {
+      lines.push(
+        "SYNCED: mailboxes were refreshed from the providers " +
+          "(ledger: sync_executed)",
+      );
+    } else if (record.op === "sync_wait_done") {
+      lines.push(
+        `SYNCED: ${details.wait_for ?? "?"} is indexed now ` +
+          `(waited ${details.waited_s ?? "?"}s; ledger: sync_wait_done)`,
+      );
+    } else if (record.op === "sync_wait_timeout") {
+      lines.push(
+        `SYNC TIMEOUT: ${details.wait_for ?? "?"} was not indexed within ` +
+          `${details.timeout_s ?? "?"}s. It may still arrive with a later sync — ` +
+          "NEVER resend a message because it is not indexed yet; run " +
+          "`mail sync --wait-for` again or check later (ledger: sync_wait_timeout)",
+      );
     } else if (record.op === "login_started") {
       const url = (details as { url?: string }).url;
       lines.push(
@@ -296,6 +326,30 @@ export interface BodyFetchers {
   microsoft: (acct: AccountConfig, graphId: string) => Promise<Buffer>;
 }
 
+/**
+ * Provider backends fetching the provider's own Sent copy of a message just
+ * delivered (by RFC Message-ID). null = not materialized yet. Injected so
+ * tests can fake them; defaults use the real Gmail/Graph adapters.
+ */
+export interface SentCopyFetchers {
+  gmail: (
+    acct: AccountConfig,
+    messageId: string,
+  ) => Promise<{
+    raw: Buffer;
+    providerMsgId?: string;
+    labels?: string[];
+  } | null>;
+  microsoft: (
+    acct: AccountConfig,
+    messageId: string,
+  ) => Promise<{
+    raw: Buffer;
+    providerMsgId?: string;
+    labels?: string[];
+  } | null>;
+}
+
 export interface BrokerOptions {
   mode?: "daemon" | "boundary";
   /** test seams */
@@ -307,6 +361,11 @@ export interface BrokerOptions {
   detectProvider?: typeof detectProvider;
   folderOps?: FolderOps;
   bodyFetchers?: BodyFetchers;
+  sentCopyFetchers?: SentCopyFetchers;
+  /** pause before retrying a not-yet-materialized Sent copy (test seam) */
+  sentCopyRetryDelayMs?: number;
+  /** pause between provider re-syncs while a `mail sync --wait-for` waits */
+  syncWaitPollMs?: number;
   /** test seam for the host settings staleness probe */
   hostSettingsProbe?: () => HostSettingsProbe;
 }
@@ -520,7 +579,7 @@ export class Broker {
         .map(([address]) => address),
     );
     progress.step("executing queued sends");
-    await intents.processOutboxes(
+    const executedSends = await intents.processOutboxes(
       this.layout,
       this.index,
       this.ledger,
@@ -529,6 +588,10 @@ export class Broker {
       this.opts.deliverers ?? this.defaultDeliverers(cfg),
       authenticatedOwn,
     );
+    if (executedSends.length) {
+      progress.step("indexing sent copies");
+      await this.reconcileSentCopies(cfg, executedSends, explained);
+    }
     progress.step("filing drafts");
     await intents.processDraftBox(
       this.layout,
@@ -545,40 +608,29 @@ export class Broker {
     progress.step("downloading message bodies");
     const justFetched = await this.processFetchRequests(cfg, explained);
     this.enforceLru(cfg, explained, justFetched);
-    if (syncNetwork) {
+    // a `mail sync` request forces a provider sync even in a push cycle, so
+    // its outcome rides the same tool call's send_results
+    const syncRequests = this.readRequests(SYNC_REQUEST_FILE);
+    const networkSynced = syncNetwork || syncRequests.length > 0;
+    if (networkSynced) {
       progress.step("checking sign-ins");
       await this.lazyLogins(cfg);
-      // one history budget per cycle, shared by both providers: whichever
-      // backfill runs first may consume it, and a caught-up account costs
-      // nothing — a tool call is never stretched by more than the budget
-      const historyDeadline = Date.now() + BACKFILL_BUDGET_MS;
-      progress.step("syncing Gmail");
-      try {
-        await (this.opts.gmailSync ?? gmail.sync)(
-          this.layout,
-          this.index,
-          this.ledger,
-          cfg,
-          explained,
-          { connCache: this.gmailConn, historyDeadline },
-        );
-      } catch (err) {
-        log.error(`gmail sync failed: ${err}`);
-      }
-      progress.step("syncing Microsoft");
-      try {
-        await (this.opts.graphSync ?? msgraph.sync)(
-          this.layout,
-          this.index,
-          this.ledger,
-          cfg,
-          explained,
-          { historyDeadline },
-        );
-      } catch (err) {
-        log.error(`microsoft sync failed: ${err}`);
-      }
-      this.lastNetworkSync = new Date().toISOString();
+      await this.syncProviders(cfg, explained);
+    }
+    if (syncRequests.length) {
+      await this.processSyncWaits(cfg, syncRequests, explained);
+    }
+
+    // remove send leftovers whose provider copy is now indexed; also picks
+    // up leftovers from before this process (cheap: one readdir per account)
+    for (const acct of cfg.accounts) {
+      sweepSentDraftLeftovers(
+        this.layout,
+        this.index,
+        this.ledger,
+        acct.address,
+        explained,
+      );
     }
 
     this.reconcileLocalFolders(explained);
@@ -593,7 +645,7 @@ export class Broker {
     // status file (at room root, outside accounts/) never affects the audit
     snapshot.writeStatus(this.layout, cfg, {
       pendingIntents: snapshot.countPendingIntents(this.layout),
-      networkSynced: syncNetwork,
+      networkSynced,
       lastNetworkSync: this.lastNetworkSync,
       mode: this.mode,
       auth: await this.authSummary(cfg),
@@ -605,6 +657,151 @@ export class Broker {
       notices: this.hostProbe?.notices ?? [],
       msClientIds: msClientIdSummary(cfg),
     });
+  }
+
+  /** One network sync of both providers; errors cost the provider, not the cycle. */
+  private async syncProviders(
+    cfg: Config,
+    explained: Set<string>,
+  ): Promise<void> {
+    // one history budget per cycle, shared by both providers: whichever
+    // backfill runs first may consume it, and a caught-up account costs
+    // nothing — a tool call is never stretched by more than the budget
+    const historyDeadline = Date.now() + BACKFILL_BUDGET_MS;
+    progress.step("syncing Gmail");
+    try {
+      await (this.opts.gmailSync ?? gmail.sync)(
+        this.layout,
+        this.index,
+        this.ledger,
+        cfg,
+        explained,
+        { connCache: this.gmailConn, historyDeadline },
+      );
+    } catch (err) {
+      log.error(`gmail sync failed: ${err}`);
+    }
+    progress.step("syncing Microsoft");
+    try {
+      await (this.opts.graphSync ?? msgraph.sync)(
+        this.layout,
+        this.index,
+        this.ledger,
+        cfg,
+        explained,
+        { historyDeadline },
+      );
+    } catch (err) {
+      log.error(`microsoft sync failed: ${err}`);
+    }
+    this.lastNetworkSync = new Date().toISOString();
+  }
+
+  /**
+   * `mail sync [--wait-for <id>] [--timeout N]` requests, one per line of
+   * room/.sync-request.json. A bare request only forces the provider sync
+   * that already ran this cycle; a wait_for blocks the cycle, re-syncing
+   * every syncWaitPollMs, until the id is indexed or the timeout lapses.
+   * The outcome (SYNCED / SYNC TIMEOUT) rides the tool call's send_results.
+   */
+  private async processSyncWaits(
+    cfg: Config,
+    requests: Array<Record<string, unknown>>,
+    explained: Set<string>,
+  ): Promise<void> {
+    for (const request of requests) {
+      const target = String(request?.wait_for ?? "").trim();
+      if (!target) {
+        this.ledger.append("sync_executed", {
+          detail: "providers were synced on request",
+        });
+        continue;
+      }
+      const timeoutRaw = Number(request?.timeout ?? SYNC_WAIT_DEFAULT_S);
+      const timeoutS = Math.min(
+        Number.isFinite(timeoutRaw) && timeoutRaw >= 0
+          ? timeoutRaw
+          : SYNC_WAIT_DEFAULT_S,
+        SYNC_WAIT_MAX_S,
+      );
+      const pollMs = this.opts.syncWaitPollMs ?? 3000;
+      const started = Date.now();
+      const deadline = started + timeoutS * 1000;
+      progress.step(`waiting for ${target}`);
+      let found = this.waitTargetIndexed(cfg, target);
+      while (!found && Date.now() < deadline) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(pollMs, deadline - Date.now())),
+        );
+        await this.syncProviders(cfg, explained);
+        found = this.waitTargetIndexed(cfg, target);
+      }
+      this.ledger.append(found ? "sync_wait_done" : "sync_wait_timeout", {
+        wait_for: target,
+        waited_s: Math.round((Date.now() - started) / 1000),
+        timeout_s: timeoutS,
+      });
+    }
+  }
+
+  /** Is the wait target (12-hex content sha or RFC Message-ID) indexed? */
+  private waitTargetIndexed(cfg: Config, target: string): boolean {
+    if (/^[0-9a-f]{12}$/.test(target)) return this.index.hasSha(target);
+    const mid = target.startsWith("<") ? target : `<${target}>`;
+    return cfg.accounts.some((acct) =>
+      this.index.hasRfcMessageId(acct.address, mid),
+    );
+  }
+
+  /**
+   * Index the provider's own Sent copy of each message delivered this cycle,
+   * so a sent message is searchable in the room within the same tool call
+   * and the Sent/cur leftover sweep can reconcile it immediately. The copy
+   * may lag the delivery (Graph sendMail is asynchronous); one short retry
+   * covers the common case, and the regular sync remains the backstop.
+   */
+  private async reconcileSentCopies(
+    cfg: Config,
+    sends: intents.ExecutedSend[],
+    explained: Set<string>,
+  ): Promise<void> {
+    const fetchers = this.opts.sentCopyFetchers ?? {
+      gmail: (acct: AccountConfig, messageId: string) =>
+        gmail.fetchSentCopy(this.layout, this.index, cfg, acct, messageId, {
+          connCache: this.gmailConn,
+        }),
+      microsoft: (acct: AccountConfig, messageId: string) =>
+        msgraph.fetchSentCopy(this.layout, acct, messageId),
+    };
+    const retryDelay = this.opts.sentCopyRetryDelayMs ?? 1500;
+    for (const send of sends) {
+      const acct = findAccount(cfg, send.account);
+      if (!acct) continue;
+      try {
+        let copy = await fetchers[acct.provider](acct, send.messageId);
+        if (!copy) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          copy = await fetchers[acct.provider](acct, send.messageId);
+        }
+        if (!copy) {
+          log.info(
+            `sent copy of ${send.messageId} not on ${acct.provider} yet; ` +
+              "the next sync picks it up",
+          );
+          continue;
+        }
+        await storeMessage(this.layout, this.index, this.ledger, {
+          account: acct.address,
+          folder: "Sent",
+          raw: copy.raw,
+          explained,
+          providerMsgId: copy.providerMsgId,
+          labels: copy.labels,
+        });
+      } catch (err) {
+        log.warn(`sent copy of ${send.messageId} could not be fetched: ${err}`);
+      }
+    }
   }
 
   private defaultDeliverers(cfg: Config): intents.Deliverers {

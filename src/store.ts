@@ -271,43 +271,35 @@ export async function storeMessage(
     explained.add(relPath);
     explained.add(layout.rel(metaPath));
   }
-  if (folder === "Sent" && parsed.messageId) {
-    dedupeSentDraftCopies(
-      layout,
-      ledger,
-      account,
-      path.dirname(dest),
-      filename,
-      parsed.messageId,
-      explained,
-    );
-  }
   return dest;
 }
 
 /**
- * Drop the broker-moved draft once the provider's own Sent copy has synced.
+ * Drop broker-moved drafts from Sent/cur once the provider's own copy of the
+ * message is indexed.
  *
  * An accepted send leaves the outgoing draft in Sent/cur (finishSend in
  * intents.ts) so the room shows what was sent before the provider syncs. That
- * copy has no .meta and is never indexed; when the provider's Sent copy lands
- * (same Message-ID, different bytes — providers add headers), the mailbox
- * would otherwise hold TWO .eml files for one message, double-counting sent
- * mail for any script grepping the account's mail folders (QA 2026-08-06, F3).
+ * copy has no .meta and is never indexed. Once the provider's copy of the
+ * same Message-ID is indexed with a body on disk — in Sent, or in INBOX for a
+ * self-addressed message Gmail keeps as one Sent+Inbox-labeled copy — the
+ * leftover would double-count sent mail for any script grepping the account's
+ * mail folders, so it is removed.
  *
- * Candidates are exactly the meta-less .eml files in the same Sent/cur — rare
- * (only pre-sync send leftovers), so reading each to match Message-ID is
- * cheap. The freshly stored file has a .meta and is skipped by construction.
+ * Runs once per account per broker cycle. Candidates are exactly the
+ * meta-less .eml files in Sent/cur — rare (only pre-sync send leftovers), so
+ * reading each to match Message-ID is cheap. A draft whose provider copy has
+ * not been indexed yet is kept; metadata-only index rows do not count (they
+ * have no bytes on disk, so the leftover is the only local copy).
  */
-function dedupeSentDraftCopies(
+export function sweepSentDraftLeftovers(
   layout: Layout,
+  index: Index,
   ledger: Ledger,
   account: string,
-  sentCur: string,
-  keepFilename: string,
-  messageId: string,
   explained?: Set<string>,
 ): void {
+  const sentCur = path.join(layout.accounts, account, "mail", "Sent", "cur");
   let names: string[];
   try {
     names = fs.readdirSync(sentCur);
@@ -316,7 +308,7 @@ function dedupeSentDraftCopies(
   }
   const present = new Set(names);
   for (const name of names) {
-    if (!name.endsWith(".eml") || name === keepFilename) continue;
+    if (!name.endsWith(".eml")) continue;
     if (present.has(name + ".meta")) continue; // indexed, provider-synced
     const file = path.join(sentCur, name);
     let raw: Buffer;
@@ -326,8 +318,11 @@ function dedupeSentDraftCopies(
       continue;
     }
     const header = raw.subarray(0, 64 * 1024).toString("latin1");
-    const m = /^message-id:[ \t]*(<[^>\s]+>)/im.exec(header);
-    if (!m || m[1] !== messageId) continue;
+    const messageId = /^message-id:[ \t]*(<[^>\s]+>)/im.exec(header)?.[1];
+    if (!messageId) continue;
+    const rel = layout.rel(file);
+    const indexed = index.pathsForRfcMessageId(account, messageId);
+    if (!indexed.some((p) => p !== rel)) continue;
     try {
       fs.rmSync(file, { force: true });
     } catch {
@@ -337,14 +332,14 @@ function dedupeSentDraftCopies(
       "sent_draft_deduped",
       {
         account,
-        path: layout.rel(file),
+        path: rel,
         message_id: messageId,
         detail:
           "moved-draft copy removed from Sent/ after the provider-synced copy landed",
       },
       { sha: sha12(raw) },
     );
-    explained?.add(layout.rel(file));
+    explained?.add(rel);
   }
 }
 

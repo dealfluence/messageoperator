@@ -1068,6 +1068,46 @@ export async function sendMime(
   }
 }
 
+/**
+ * The provider's own Sent Items copy of a just-delivered message, fetched by
+ * internetMessageId so the send's push cycle can index it immediately instead
+ * of waiting for the next delta sync. Returns null when Graph has not
+ * materialized the copy yet (sendMail is asynchronous) or the account cannot
+ * authenticate — the regular sync picks it up later.
+ */
+export async function fetchSentCopy(
+  layout: Layout,
+  acct: AccountConfig,
+  internetMessageId: string,
+  opts: { requestFn?: RequestFn; getToken?: TokenGetter } = {},
+): Promise<{ raw: Buffer; providerMsgId?: string; labels?: string[] } | null> {
+  const requestFn = opts.requestFn ?? defaultRequestFn;
+  const getToken =
+    opts.getToken ?? ((a: AccountConfig) => acquireTokenSilentFor(layout, a));
+  const token = await getToken(acct);
+  if (token === null) return null;
+  // OData string literal: single quotes double
+  const literal = internetMessageId.replace(/'/g, "''");
+  const found = await requestFn(
+    "GET",
+    `${GRAPH}/me/mailFolders/sentitems/messages` +
+      `?$filter=internetMessageId eq '${encodeURIComponent(literal)}'&$select=id`,
+    token,
+  );
+  const value = (JSON.parse(found.body.toString("utf-8")).value ??
+    []) as Array<{
+    id: string;
+  }>;
+  const message = value[0];
+  if (!message) return null;
+  const { body } = await requestFn(
+    "GET",
+    `${GRAPH}/me/messages/${encodeURIComponent(message.id)}/$value`,
+    token,
+  );
+  return { raw: body, providerMsgId: message.id, labels: ["SENT"] };
+}
+
 // ---- folder changes (archive / move) --------------------------------
 //
 // The provider-abstracted folder-change primitive, Graph side. Outlook has
@@ -1077,6 +1117,17 @@ export async function sendMime(
 // mailFolder id. Identified by internetMessageId (the RFC Message-ID), so
 // nothing is stored at sync time. NEVER destructive: no DELETE, no
 // deleteditems, no permanentDelete — only /move.
+//
+// One Message-ID can match SEVERAL provider items: a self-cc'd/self-bcc'd
+// send exists as both a Sent Items copy and an Inbox copy with the same
+// internetMessageId (and Graph's stable result order can put the Sent copy
+// first). Taking the first match moved an arbitrary copy — `mail archive`
+// reported success while the inbox copy stayed put, and retries oscillated
+// the SAME Sent copy in and out of the inbox (SAT-1). So the resolution is
+// deliberate: prefer copies in the folder the op empties (archive drains
+// inbox, unarchive drains archive), treat "a copy already sits in the
+// target" as done, and refuse a blind pick when several copies match but
+// none is in either folder.
 
 export async function moveMessage(
   layout: Layout,
@@ -1106,27 +1157,29 @@ export async function moveMessage(
       `&$select=id,parentFolderId`,
     token,
   );
-  const value = (JSON.parse(found.body.toString("utf-8")).value ??
+  const matches = (JSON.parse(found.body.toString("utf-8")).value ??
     []) as Array<{
     id: string;
     parentFolderId: string;
   }>;
-  const message = value[0];
-  if (!message) {
+  if (matches.length === 0) {
     throw new Rejection(
       "message_not_found",
       `no message with internetMessageId ${move.internetMessageId} found in ${acct.address}`,
     );
   }
 
-  let targetId: string;
-  try {
+  const resolveFolderId = async (name: string): Promise<string> => {
     const folder = await requestFn(
       "GET",
-      `${GRAPH}/me/mailFolders/${move.target}?$select=id`,
+      `${GRAPH}/me/mailFolders/${name}?$select=id`,
       token,
     );
-    targetId = String(JSON.parse(folder.body.toString("utf-8")).id ?? "");
+    return String(JSON.parse(folder.body.toString("utf-8")).id ?? "");
+  };
+  let targetId: string;
+  try {
+    targetId = await resolveFolderId(move.target);
   } catch (err) {
     throw new Rejection(
       "target_not_found",
@@ -1140,16 +1193,56 @@ export async function moveMessage(
     );
   }
 
-  if (message.parentFolderId === targetId) return "noop"; // already there
+  // the archive/unarchive presets imply which folder the op empties; that
+  // is where the copy the request MEANS lives when several match
+  const sourceWellKnown =
+    move.target === "archive"
+      ? "inbox"
+      : move.target === "inbox"
+        ? "archive"
+        : null;
+  let sourceId = "";
+  if (sourceWellKnown) {
+    try {
+      sourceId = await resolveFolderId(sourceWellKnown);
+    } catch {
+      /* the folder may not exist (e.g. archive never provisioned) */
+    }
+  }
 
-  const moved = await requestFn(
-    "POST",
-    `${GRAPH}/me/messages/${message.id}/move`,
-    token,
-    { data: Buffer.from(JSON.stringify({ destinationId: targetId })) },
-  );
-  if (moved.status !== 200 && moved.status !== 201) {
-    throw new Error(`graph move returned ${moved.status}`);
+  const inTarget = matches.filter((m) => m.parentFolderId === targetId);
+  if (inTarget.length === matches.length) return "noop"; // all already there
+  let candidates = sourceId
+    ? matches.filter((m) => m.parentFolderId === sourceId)
+    : [];
+  if (candidates.length === 0) {
+    // nothing in the source folder: if some copy already reached the target,
+    // the op the user meant is done (retrying must NOT relocate the Sent
+    // copy); a lone stray copy (a rule moved it) is still unambiguous
+    if (inTarget.length > 0) return "noop";
+    const strays = matches.filter((m) => m.parentFolderId !== targetId);
+    if (strays.length > 1) {
+      throw new Rejection(
+        "ambiguous_message",
+        `${matches.length} messages in ${acct.address} share internetMessageId ` +
+          `${move.internetMessageId} and none is in ` +
+          `${sourceWellKnown ?? "the source folder"} or ${move.target}; ` +
+          `refusing to move an arbitrary copy`,
+      );
+    }
+    candidates = strays;
+  }
+
+  for (const message of candidates) {
+    const moved = await requestFn(
+      "POST",
+      `${GRAPH}/me/messages/${message.id}/move`,
+      token,
+      { data: Buffer.from(JSON.stringify({ destinationId: targetId })) },
+    );
+    if (moved.status !== 200 && moved.status !== 201) {
+      throw new Error(`graph move returned ${moved.status}`);
+    }
   }
   return "applied";
 }
@@ -1162,6 +1255,12 @@ export async function moveMessage(
 // internetMessageId (the RFC Message-ID) like moveMessage above, and a
 // clean no-op when the provider already agrees. NEVER destructive: a PATCH
 // of one boolean property — no DELETE, no move, no folder change.
+//
+// Like moveMessage, several items can share one Message-ID (self-cc: Sent
+// Items copy + Inbox copy). Read state addresses the LOGICAL message, so
+// every matching copy is brought to the requested state — checking only the
+// first match silently skipped the copy the user meant whenever an
+// already-read Sent copy sorted first (SAT-1).
 
 export async function setReadState(
   layout: Layout,
@@ -1191,29 +1290,31 @@ export async function setReadState(
       `&$select=id,isRead`,
     token,
   );
-  const value = (JSON.parse(found.body.toString("utf-8")).value ??
+  const matches = (JSON.parse(found.body.toString("utf-8")).value ??
     []) as Array<{
     id: string;
     isRead?: boolean;
   }>;
-  const message = value[0];
-  if (!message) {
+  if (matches.length === 0) {
     throw new Rejection(
       "message_not_found",
       `no message with internetMessageId ${change.internetMessageId} found in ${acct.address}`,
     );
   }
 
-  if (message.isRead === change.isRead) return "noop"; // already there
+  const pending = matches.filter((m) => m.isRead !== change.isRead);
+  if (pending.length === 0) return "noop"; // every copy already agrees
 
-  const patched = await requestFn(
-    "PATCH",
-    `${GRAPH}/me/messages/${message.id}`,
-    token,
-    { data: Buffer.from(JSON.stringify({ isRead: change.isRead })) },
-  );
-  if (patched.status !== 200) {
-    throw new Error(`graph isRead patch returned ${patched.status}`);
+  for (const message of pending) {
+    const patched = await requestFn(
+      "PATCH",
+      `${GRAPH}/me/messages/${message.id}`,
+      token,
+      { data: Buffer.from(JSON.stringify({ isRead: change.isRead })) },
+    );
+    if (patched.status !== 200) {
+      throw new Error(`graph isRead patch returned ${patched.status}`);
+    }
   }
   return "applied";
 }

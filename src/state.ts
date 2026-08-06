@@ -332,6 +332,20 @@ export class Index {
   }
 
   /**
+   * Room-relative paths of full-body rows for this RFC Message-ID.
+   * Metadata-only rows (path '') are excluded: they stand in for a message
+   * with no bytes on disk, so they cannot justify removing a local copy.
+   */
+  pathsForRfcMessageId(account: string, rfcMessageId: string): string[] {
+    return this.db
+      .prepare(
+        "SELECT path FROM message WHERE account=? AND rfc_message_id=? AND path<>''",
+      )
+      .all(account, rfcMessageId)
+      .map((r) => String((r as { path: string }).path));
+  }
+
+  /**
    * Point an existing row at the folder the PROVIDER now reports, and return
    * what changed (null when it already agreed, or there is no such row).
    *
