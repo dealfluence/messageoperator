@@ -911,6 +911,46 @@ const defaultSmtpSender: SmtpSender = async ({
   }
 };
 
+/**
+ * Remove the Bcc header (with continuation lines) from a MIME message's top
+ * header block, byte-preserving everything else.
+ *
+ * SMTP delivers to the ENVELOPE recipients, so the Bcc addresses still get
+ * the message — but Gmail's SMTP submission does not reliably strip a Bcc
+ * header from raw DATA, and a header left in would disclose the Bcc list to
+ * every recipient. Graph is the opposite: sendMail derives recipients from
+ * the MIME itself and Exchange strips Bcc on submission, so the Microsoft
+ * path must NOT use this.
+ */
+export function stripBccHeader(mime: Buffer): Buffer {
+  const text = mime.toString("latin1"); // byte-preserving
+  let split = text.indexOf("\r\n\r\n");
+  let sepLen = 4;
+  const lfSplit = text.indexOf("\n\n");
+  if (split === -1 || (lfSplit !== -1 && lfSplit < split)) {
+    split = lfSplit;
+    sepLen = 2;
+  }
+  const headerText = split === -1 ? text : text.slice(0, split);
+  const sep = split === -1 ? "" : text.slice(split, split + sepLen);
+  const bodyText = split === -1 ? "" : text.slice(split + sepLen);
+  const kept: string[] = [];
+  let dropping = false;
+  for (const line of headerText.split(/(?<=\n)/)) {
+    if (/^[ \t]/.test(line)) {
+      if (dropping) continue; // continuation of a dropped Bcc line
+    } else {
+      dropping = /^bcc\s*:/i.test(line);
+      if (dropping) continue;
+    }
+    kept.push(line);
+  }
+  // headerText never ends in a newline (split found the first blank line), so
+  // if the LAST header line was the dropped Bcc, trim the eol it left behind.
+  const header = kept.join("").replace(/\r?\n$/, "");
+  return Buffer.from(header + sep + bodyText, "latin1");
+}
+
 /** Deliver exact MIME bytes via Gmail SMTP; Rejection on missing credential. */
 export async function sendMime(
   layout: Layout,
@@ -944,7 +984,7 @@ export async function sendMime(
     address: acct.address,
     password,
     envelopeTo: recipients,
-    wire: toWire(mime),
+    wire: toWire(stripBccHeader(mime)),
   });
 }
 

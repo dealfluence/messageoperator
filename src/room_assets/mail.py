@@ -88,8 +88,11 @@ usage: mail <verb> [args]
       Write a threaded reply draft into the same account's Drafts. Prints
       path. The source message body must be on disk (fetch it first).
       Pass --all to reply-all to all original recipients.
-  mail compose <account> <to> <subject> <bodyfile>
-      Write a new draft into <account>'s Drafts. Prints path.
+  mail compose <account> <to> <subject> <bodyfile> [--cc <addr>]... [--bcc <addr>]...
+      Write a new draft into <account>'s Drafts. Prints path. --cc/--bcc
+      may be repeated (or given a comma-separated list). You may also edit
+      the draft file (add Cc:/Bcc:, adjust the body) before mail send -
+      recipients are read from the draft itself at send time.
   mail send <draft-path> [--attach <room-relative-path>]...
       Queue a draft for sending. Only accepts paths under Drafts/.
   mail draft <draft-path>
@@ -140,11 +143,13 @@ usage: mail <verb> [args]
       machine (~/Downloads/scan.jpg) — the room runs on their computer, so any
       path it can see is importable. Only a file that lives solely in a
       separate cloud sandbox is out of reach, and that is reported plainly.
-  mail export <id-or-attachment-path> --to <sandbox-dir> [--name <file>]
-      Copy a received attachment OUT to your sandbox so skills can open it
-      (e.g. to compile received .xlsx files). <id> exports every attachment on
-      the message; --name picks one. --to must be your sandbox outputs/uploads
-      folder. This is the only command that writes outside the room.
+  mail export <id-or-attachment-path> --to <absolute-dir> [--name <file>]
+      Copy a received attachment OUT of the room - to your sandbox
+      outputs/uploads mount so skills can open it, or to any folder that
+      already exists on this host. The destination is never created for
+      you: mkdir it first. <id> exports every attachment on the message;
+      --name picks one. This is the only command that writes outside the
+      room.
   mail settings
       Open the Message Operator settings page in the user's browser (dry run,
       allowed recipient domains, remove mailboxes). You can open it; only
@@ -166,7 +171,26 @@ usage: mail <verb> [args]
         --formulas      show cell formulas instead of values
         --formatted     records/jsonl/csv/tsv: use display text, not raw values
         --header-row N  override the detected header row (use -1 for none)
+
+  mail <verb> --help prints that verb's usage and exits 0.
 """
+
+
+def verb_help(verb):
+    """The verb's stanza(s) from USAGE_TEXT: its `mail <verb> ...` line(s)
+    plus their indented description lines. Multiple stanzas (mail table) are
+    all returned. '' when the verb has no stanza."""
+    out = []
+    keep = False
+    for line in USAGE_TEXT.splitlines():
+        m = re.match(r"^  mail ([a-z-]+)", line)
+        if m:
+            keep = m.group(1) == verb
+        elif not line.startswith("      ") and not line.startswith("        "):
+            keep = False  # left the indented description block
+        if keep:
+            out.append(line)
+    return "\n".join(out)
 
 
 def sha12(data):
@@ -229,17 +253,28 @@ def append_jsonl(file, obj):
 # The Cowork/Claude sandbox and this room are two path-isolated filesystems.
 # The sandbox VM cannot see the room, but this room process (a host process)
 # CAN read and write the sandbox's outputs/uploads folders. import/export use
-# that to move files across the boundary. export is the ONLY operation allowed
-# to write outside the room jail, and only into a sandbox mount (below).
+# that to move files across the boundary. export is the ONLY mail verb allowed
+# to write outside the room jail (see the design decision below).
 ILLEGAL_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
-# A Cowork sandbox mount: .../local-agent-mode-sessions/<...>/outputs (or
-# uploads). export refuses any destination that is not one of these, so a
-# prompt-injected attachment can never be written to an arbitrary location.
-SANDBOX_MOUNT_RE = re.compile(
-    r"local-agent-mode-sessions[/\\].+[/\\](outputs|uploads)(?:[/\\]|$)",
-    re.IGNORECASE,
-)
+# DESIGN DECISION (2026-08-06, QA F2): the room is a WORKSPACE on the user's
+# own machine, not a sandbox — `mail export` may write into ANY directory
+# that ALREADY EXISTS on this host (a Cowork outputs/uploads mount is just
+# one such directory). Until this date export refused everything outside a
+# Cowork session mount; on generic MCP hosts (no Cowork sandbox) that made
+# every received attachment un-exportable, and the refusal pointed at a path
+# that does not exist. Two guardrails remain, both deliberate:
+#   1. a destination SHAPED like a sandbox-VM path (/mnt/outputs,
+#      /home/claude, /tmp, ...) is refused with BRIDGE_UNAVAILABLE_MSG:
+#      copying there would land in a dead host directory, not the agent's
+#      sandbox (the false-success trap);
+#   2. the destination must already exist — export NEVER creates
+#      directories, so a hallucinated or typo'd path fails fast instead of
+#      silently growing a directory tree. `mkdir -p` it explicitly first.
+# Prompt-injection scope: messageoperator_bash already runs an unsandboxed
+# shell as the user on this same host, so writing an attachment into an
+# existing host directory grants nothing an injected instruction could not
+# already do with `cp`.
 
 
 def sanitize_attachment_name(name):
@@ -248,14 +283,6 @@ def sanitize_attachment_name(name):
     base = base[base.rfind("/") + 1 :]
     base = ILLEGAL_FILENAME_CHARS.sub("_", base).strip(" .")
     return base or "attachment"
-
-
-def is_allowed_export_dir(dest):
-    """True when `dest` is inside a Cowork sandbox outputs/uploads mount."""
-    d = str(dest)
-    if ".." in d.replace("\\", "/").split("/"):
-        return False
-    return bool(SANDBOX_MOUNT_RE.search(d))
 
 
 # Markers of a path that belongs to a SEPARATE Claude sandbox VM the room
@@ -518,6 +545,19 @@ def decode_words(val):
         return val
 
 
+def display_header(val):
+    """Collapse folding whitespace in a decoded header for DISPLAY.
+
+    An RFC 5322 fold ("\\r\\n " + continuation) unfolds with the fold's
+    leading space kept, so a Graph-folded RFC 2047 subject rendered as
+    "Subject:  QA-S2 ..." (two spaces) while index/search TSV normalized the
+    same subject to single spaces — breaking any string comparison between
+    `mail read` and `mail search` output and naive `grep '^Subject: ...'`
+    post-processing (QA 2026-08-06, F5). Whitespace runs (folds, tabs)
+    collapse to single spaces, matching the TSV path."""
+    return " ".join(str(val).split())
+
+
 def parse_eml_bytes(raw):
     return BytesParser(policy=policy.default).parsebytes(raw)
 
@@ -617,7 +657,7 @@ def print_message_file(p, part=1):
     for name in ["From", "To", "Cc", "Date", "Subject", "Message-ID"]:
         val = msg.get(name)
         if val:
-            print(f"{name}: {decode_words(str(val))}")
+            print(f"{name}: {display_header(decode_words(str(val)))}")
 
     meta = p.with_name(p.name + ".meta")
     body = None
@@ -1365,9 +1405,28 @@ def cmd_reply(args):
 
 
 def cmd_compose(args):
-    if len(args) != 4:
-        die(USAGE, "usage: mail compose <account> <to> <subject> <bodyfile>")
-    address, to, subject, body_arg = args
+    usage = (
+        "usage: mail compose <account> <to> <subject> <bodyfile>"
+        " [--cc <addr>]... [--bcc <addr>]..."
+    )
+    positionals = []
+    cc = []
+    bcc = []
+    it = iter(args)
+    for arg in it:
+        if arg in ("--cc", "--bcc"):
+            try:
+                val = next(it)
+            except StopIteration:
+                die(USAGE, f"mail compose: {arg} needs an address")
+            (cc if arg == "--cc" else bcc).append(val)
+        elif arg.startswith("--"):
+            die(USAGE, f"mail compose: unknown argument {arg!r}\n{usage}")
+        else:
+            positionals.append(arg)
+    if len(positionals) != 4:
+        die(USAGE, usage)
+    address, to, subject, body_arg = positionals
     if not account_dir(address).is_dir():
         die(
             NOT_FOUND,
@@ -1376,6 +1435,10 @@ def cmd_compose(args):
     body_file = resolve_in_room(body_arg)
     body = body_file.read_text(encoding="utf-8", errors="replace")
     msg = new_message(address, to, subject, body)
+    if cc:
+        msg["Cc"] = ", ".join(cc)
+    if bcc:
+        msg["Bcc"] = ", ".join(bcc)
     dest = write_draft(address, msg)
     print(rel(dest))
     return OK
@@ -2239,18 +2302,19 @@ def cmd_import(args):
 
 def cmd_export(args):
     """Copy a room file (a received attachment, by message id or by
-    attachments/<sha>/<file> path) OUT to the Cowork sandbox so skills can open
-    it. This is the ONLY command that writes outside the room jail, and only
-    into a sandbox outputs/uploads mount."""
+    attachments/<sha>/<file> path) OUT of the room — to a Cowork sandbox
+    outputs/uploads mount, or to any existing directory on this host. This is
+    the ONLY mail verb that writes outside the room jail; the destination must
+    already exist (export never creates directories)."""
     if len(args) < 3 or "--to" not in args:
         die(
             USAGE,
-            "usage: mail export <id-or-attachment-path> --to <sandbox-dir> [--name <file>]",
+            "usage: mail export <id-or-attachment-path> --to <absolute-dir> [--name <file>]",
         )
     to_idx = args.index("--to")
     dest_dir_arg = args[to_idx + 1] if to_idx + 1 < len(args) else None
     if not dest_dir_arg:
-        die(USAGE, "mail export: --to needs a sandbox directory")
+        die(USAGE, "mail export: --to needs a destination directory")
     only_name = None
     if "--name" in args:
         ni = args.index("--name")
@@ -2302,21 +2366,29 @@ def cmd_export(args):
         if not files:
             die(NOT_FOUND, f"no attachment named {only_name!r} on that message")
 
-    # 2. validate the destination is a real sandbox mount (jail escape hatch)
-    # A VM-shaped destination (plain chat) is unreachable no matter what path
-    # is passed — say so honestly rather than "pass the outputs path your
-    # sandbox reports" (there is none) or silently copying to a dead host dir.
+    # 2. validate the destination (see the design decision above
+    # sanitize_attachment_name). A VM-shaped destination (plain chat) is
+    # unreachable no matter what path is passed — say so honestly rather than
+    # silently copying to a dead host dir. Otherwise any EXISTING directory
+    # on this host is a legal destination; export never creates directories.
+    # The VM-shape check runs BEFORE is_absolute(), mirroring cmd_import: a
+    # sandbox path like "/mnt/outputs" is not drive-qualified, so
+    # Windows-native Python would misreport it as "not absolute".
     if looks_like_sandbox_vm_path(dest_dir_arg, Path(dest_dir_arg).resolve()):
         die(POLICY_REFUSAL, BRIDGE_UNAVAILABLE_MSG)
-    if not is_allowed_export_dir(dest_dir_arg):
-        die(
-            POLICY_REFUSAL,
-            "refusing: export can only write into a Cowork sandbox outputs/uploads "
-            f"folder (got {dest_dir_arg!r}); pass the outputs path your sandbox reports",
-        )
     dest_dir = Path(dest_dir_arg)
+    if not dest_dir.is_absolute():
+        die(
+            USAGE,
+            f"mail export: --to needs an ABSOLUTE directory path (got {dest_dir_arg!r})",
+        )
     if not dest_dir.is_dir():
-        die(NOT_FOUND, f"destination directory does not exist: {dest_dir_arg}")
+        die(
+            NOT_FOUND,
+            f"destination directory does not exist on this host: {dest_dir_arg}\n"
+            "export never creates directories — check the path for typos, or "
+            "create it first (mkdir -p) and re-run",
+        )
 
     # 3. copy out
     import shutil
@@ -2327,10 +2399,7 @@ def cmd_export(args):
         shutil.copyfile(f, out)
         exported.append(str(out))
         print(f"EXPORTED: {rel(f)} -> {out}")
-    print(
-        f"{len(exported)} file(s) exported to the sandbox; open them there "
-        "(e.g. with the xlsx/pdf skills)."
-    )
+    print(f"{len(exported)} file(s) exported to {dest_dir}.")
     return OK
 
 
@@ -2514,6 +2583,47 @@ def _sheet_columns(conn, sheet_index):
     ).fetchall()
 
 
+# Strict "this text IS a number": optional minus, no leading zeros (a "00123"
+# order code or zip must stay a string), optional decimal part. Deliberately
+# excludes "+1", "1e5", "1.", ".5", "1,000" and phone-number shapes.
+_DSV_NUMERIC_RE = re.compile(r"-?(0|[1-9]\d*)(\.\d+)?")
+
+
+def _sidecar_generator(conn):
+    row = conn.execute("SELECT value FROM meta WHERE key='generator'").fetchone()
+    return row["value"] if row else ""
+
+
+def _infer_delimited_col_types(conn, sheet_index, columns, data_start):
+    """Column-strict numeric inference for DELIMITED sources (QA 2026-08-06, F4).
+
+    CSV/TSV carry no cell typing, so the sidecar types every column 's' and
+    the machine formats used to emit '"qty": "12"' — contradicting SKILL.md's
+    "numbers as numbers" promise and silently concatenating in any consumer
+    with loose `+` semantics. A column is upgraded to 'n' only when EVERY
+    stored data value in it (empty cells are never stored) is a strict decimal
+    number; one stray value keeps the whole column textual. Spreadsheet
+    sources are untouched: their cells carry real types, and a workbook that
+    deliberately typed digits as text (a zip-code column) must stay text.
+    """
+    types = []
+    for c in columns:
+        if c["native_type"] != "s":
+            types.append(c["native_type"])
+            continue
+        rows = conn.execute(
+            "SELECT value_raw FROM cells "
+            "WHERE sheet_index=? AND col_index=? AND row_index>=?",
+            (sheet_index, c["col_index"], data_start),
+        ).fetchall()
+        vals = [r["value_raw"] for r in rows if r["value_raw"] is not None]
+        if vals and all(_DSV_NUMERIC_RE.fullmatch(str(v).strip()) for v in vals):
+            types.append("n")
+        else:
+            types.append("s")
+    return types
+
+
 def _assemble_rows(conn, sheet_index, n_cols, which, row_lo, row_hi):
     """Assemble dense rows [row_lo, row_hi) from the tall cells table.
 
@@ -2638,11 +2748,19 @@ def _list_sheets(conn, attachment_name):
         "FROM sheets ORDER BY sheet_index"
     ).fetchall()
     print(f"{attachment_name}: {len(sheets)} sheet(s)")
+    dsv = _sidecar_generator(conn) == "stdlib-dsv"
     for s in sheets:
         cols = _sheet_columns(conn, s["sheet_index"])
+        if dsv:
+            # delimited files carry no native typing; show the same inferred
+            # types the machine formats will coerce with (QA F4)
+            data_start = 0 if s["header_row"] is None else s["header_row"] + 1
+            types = _infer_delimited_col_types(conn, s["sheet_index"], cols, data_start)
+        else:
+            types = [c["native_type"] for c in cols]
         schema = ", ".join(
-            f"{c['header'] or ('col' + str(c['col_index']))}:{c['native_type']}"
-            for c in cols
+            f"{c['header'] or ('col' + str(c['col_index']))}:{t}"
+            for c, t in zip(cols, types)
         )
         hdr = "none" if s["header_row"] is None else str(s["header_row"])
         rows = _data_row_count(s["n_rows"], s["header_row"])
@@ -2730,8 +2848,16 @@ def _print_sheet(conn, attachment_name, sheet_arg, flags):
 
     # coerce to native JSON/scalar types only for the machine formats reading
     # raw values (not --formatted display text, not --formulas strings); that
-    # is exactly the `which == "value_raw"` case
-    col_types = [c["native_type"] for c in columns] if which == "value_raw" else None
+    # is exactly the `which == "value_raw"` case. Delimited sources have no
+    # native typing, so their column types are inferred (strictly) instead.
+    col_types = None
+    if which == "value_raw":
+        if _sidecar_generator(conn) == "stdlib-dsv":
+            col_types = _infer_delimited_col_types(
+                conn, sheet_index, columns, data_start
+            )
+        else:
+            col_types = [c["native_type"] for c in columns]
 
     if fmt == "md":
         _emit_md(
@@ -2873,6 +2999,17 @@ def main(argv):
     if handler is None:
         print(f"mail: unknown verb {verb!r}\n\n{USAGE_TEXT}", file=sys.stderr, end="")
         return USAGE
+    # `mail <verb> --help` is a HELP REQUEST, not a usage error: print the
+    # verb's stanza on stdout and exit 0 (QA 2026-08-06, F9). Only the first
+    # argument counts, so a later literal "--help" value (a search term, a
+    # subject) is never swallowed.
+    if argv[1:2] and argv[1] in ("-h", "--help"):
+        stanza = verb_help(verb)
+        if stanza:
+            print(stanza)
+        else:
+            print(USAGE_TEXT, end="")
+        return OK
     try:
         return handler(argv[1:])
     except ValueError as exc:

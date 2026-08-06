@@ -271,7 +271,81 @@ export async function storeMessage(
     explained.add(relPath);
     explained.add(layout.rel(metaPath));
   }
+  if (folder === "Sent" && parsed.messageId) {
+    dedupeSentDraftCopies(
+      layout,
+      ledger,
+      account,
+      path.dirname(dest),
+      filename,
+      parsed.messageId,
+      explained,
+    );
+  }
   return dest;
+}
+
+/**
+ * Drop the broker-moved draft once the provider's own Sent copy has synced.
+ *
+ * An accepted send leaves the outgoing draft in Sent/cur (finishSend in
+ * intents.ts) so the room shows what was sent before the provider syncs. That
+ * copy has no .meta and is never indexed; when the provider's Sent copy lands
+ * (same Message-ID, different bytes — providers add headers), the mailbox
+ * would otherwise hold TWO .eml files for one message, double-counting sent
+ * mail for any script grepping the account's mail folders (QA 2026-08-06, F3).
+ *
+ * Candidates are exactly the meta-less .eml files in the same Sent/cur — rare
+ * (only pre-sync send leftovers), so reading each to match Message-ID is
+ * cheap. The freshly stored file has a .meta and is skipped by construction.
+ */
+function dedupeSentDraftCopies(
+  layout: Layout,
+  ledger: Ledger,
+  account: string,
+  sentCur: string,
+  keepFilename: string,
+  messageId: string,
+  explained?: Set<string>,
+): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(sentCur);
+  } catch {
+    return;
+  }
+  const present = new Set(names);
+  for (const name of names) {
+    if (!name.endsWith(".eml") || name === keepFilename) continue;
+    if (present.has(name + ".meta")) continue; // indexed, provider-synced
+    const file = path.join(sentCur, name);
+    let raw: Buffer;
+    try {
+      raw = fs.readFileSync(file);
+    } catch {
+      continue;
+    }
+    const header = raw.subarray(0, 64 * 1024).toString("latin1");
+    const m = /^message-id:[ \t]*(<[^>\s]+>)/im.exec(header);
+    if (!m || m[1] !== messageId) continue;
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      continue;
+    }
+    ledger.append(
+      "sent_draft_deduped",
+      {
+        account,
+        path: layout.rel(file),
+        message_id: messageId,
+        detail:
+          "moved-draft copy removed from Sent/ after the provider-synced copy landed",
+      },
+      { sha: sha12(raw) },
+    );
+    explained?.add(layout.rel(file));
+  }
 }
 
 /**

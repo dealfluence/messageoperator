@@ -103,7 +103,7 @@ class MailCliTestBase(unittest.TestCase):
             d.mkdir(parents=True, exist_ok=True)
         self.mail_py = self.bin / "mail.py"
         shutil.copyfile(MAIL_PY_SRC, self.mail_py)
-        # a "sandbox" outputs mount whose path matches SANDBOX_MOUNT_RE
+        # a Cowork-style "sandbox" outputs mount (a real host directory)
         self.sandbox = (
             self.home
             / "local-agent-mode-sessions"
@@ -464,6 +464,76 @@ class ReplyThreadingTests(MailCliTestBase):
         self.assertNotEqual("To:", to_line.strip())
 
 
+class ComposeTests(MailCliTestBase):
+    def _compose(self, *extra, expect_code=0):
+        self.account_dir("me@adeu.ai")
+        body = self.room / "cbody.txt"
+        body.write_text("Hello.\n")
+        return self.run_mail(
+            "compose",
+            "me@adeu.ai",
+            "to@example.com",
+            "Subject here",
+            self.rel(body),
+            *extra,
+            expect_code=expect_code,
+        )
+
+    def _headers(self, proc):
+        draft = self.room / proc.stdout.strip().splitlines()[-1]
+        head = draft.read_bytes().split(b"\n\n")[0].split(b"\r\n\r\n")[0]
+        return head.decode("utf-8", "replace")
+
+    def test_compose_without_flags_has_no_cc_or_bcc(self):
+        headers = self._headers(self._compose())
+        self.assertIn("To: to@example.com", headers)
+        self.assertNotIn("Cc:", headers)
+        self.assertNotIn("Bcc:", headers)
+
+    def test_cc_and_bcc_flags_add_headers(self):
+        proc = self._compose("--cc", "counsel@example.com", "--bcc", "audit@example.com")
+        headers = self._headers(proc)
+        cc = [l for l in headers.splitlines() if l.startswith("Cc:")]
+        bcc = [l for l in headers.splitlines() if l.startswith("Bcc:")]
+        self.assertEqual(len(cc), 1, headers)
+        self.assertEqual(len(bcc), 1, headers)
+        self.assertIn("counsel@example.com", cc[0])
+        self.assertIn("audit@example.com", bcc[0])
+
+    def test_repeated_cc_flags_join_into_one_header(self):
+        proc = self._compose("--cc", "a@example.com", "--cc", "b@example.com")
+        headers = self._headers(proc)
+        cc = [l for l in headers.splitlines() if l.startswith("Cc:")]
+        self.assertEqual(len(cc), 1, headers)
+        self.assertIn("a@example.com", cc[0])
+        self.assertIn("b@example.com", cc[0])
+
+    def test_flags_may_precede_positionals(self):
+        self.account_dir("me@adeu.ai")
+        body = self.room / "cbody.txt"
+        body.write_text("Hello.\n")
+        proc = self.run_mail(
+            "compose",
+            "--cc",
+            "a@example.com",
+            "me@adeu.ai",
+            "to@example.com",
+            "Subject here",
+            self.rel(body),
+            expect_code=0,
+        )
+        self.assertIn("a@example.com", self._headers(proc))
+
+    def test_cc_without_value_is_a_usage_error(self):
+        proc = self._compose("--cc", expect_code=1)
+        self.assertIn("--cc needs an address", proc.stderr)
+
+    def test_unknown_flag_is_a_usage_error(self):
+        proc = self._compose("--carbon", "x@example.com", expect_code=1)
+        self.assertIn("unknown argument", proc.stderr)
+        self.assertIn("--cc", proc.stderr)  # usage names the flags
+
+
 class ImportTests(MailCliTestBase):
     def test_import_brings_outside_file_into_attachments(self):
         src = self.sandbox / "report.xlsx"
@@ -553,11 +623,10 @@ class BridgeDetectorTests(MailCliTestBase):
     /mnt/..., and are where an agent naturally writes scratch files — the QA
     run hit exactly that path shape.
 
-    Export only LOOKS better here because it has a second, independent guard
-    (is_allowed_export_dir) that rejects anything outside a session mount, so
-    an undiagnosed shape still gets a coherent refusal. Import has no such
-    backstop, which is why the gap is only visible on import. Fixing the marker
-    list fixes both; giving import a backstop is the defence in depth.
+    Since 2026-08-06 (QA F2) export accepts any existing host directory, so
+    the shape detector is the ONLY thing standing between an agent and a
+    false-success copy into a dead host dir on BOTH verbs. Fixing the marker
+    list fixes both; there is no second guard behind it any more.
     """
 
     def _mail_module(self):
@@ -698,58 +767,49 @@ class ExportTests(MailCliTestBase):
             (self.sandbox / "Invoice.pdf").read_bytes(), b"%PDF-1.4 invoice"
         )
 
-    def test_export_refuses_non_sandbox_destination(self):
+    def test_export_to_existing_host_dir_works(self):
+        """DESIGN DECISION (2026-08-06, QA F2): the room is a workspace on the
+        user's own machine, not a sandbox — any directory that already exists
+        on the host is a legal export destination. Until this date export
+        refused everything outside a Cowork session mount, which made every
+        received attachment un-exportable on generic MCP hosts (and the
+        refusal pointed at an outputs/ path that does not exist there).
+        History note: an older regression guard here pinned the opposite
+        (mount-only) contract after an autonomous fix loop deleted the
+        boundary by accident; the relaxation below is deliberate, made by the
+        maintainer, and rests on the fact that messageoperator_bash already
+        runs an unsandboxed shell as the user — export to an existing dir
+        grants nothing an injected instruction could not already do with cp."""
         _p, att_dir = self._received_with_attachment()
         rel = self.rel(att_dir / "Invoice.pdf")
-        bad = self.home / "not_a_mount"
-        bad.mkdir(exist_ok=True)
-        proc = self.run_mail("export", rel, "--to", str(bad))
-        self.assertEqual(proc.returncode, 2)  # POLICY_REFUSAL
-        self.assertIn("sandbox", proc.stderr.lower())
-        self.assertFalse((bad / "Invoice.pdf").exists())
+        plain = self.home / "not_a_mount"
+        plain.mkdir(exist_ok=True)
+        proc = self.run_mail("export", rel, "--to", str(plain), expect_code=0)
+        self.assertIn("EXPORTED", proc.stdout)
+        self.assertEqual(
+            (plain / "Invoice.pdf").read_bytes(), b"%PDF-1.4 invoice"
+        )
 
-    def test_export_refuses_traversal_even_if_mount_shaped(self):
+    def test_export_never_creates_the_destination(self):
+        """The fail-fast half of the F2 design decision: a destination that
+        does not exist is refused (NOT_FOUND) and NOT created, so a
+        hallucinated or typo'd path cannot silently grow a directory tree."""
         _p, att_dir = self._received_with_attachment()
         rel = self.rel(att_dir / "Invoice.pdf")
-        traversal = str(self.sandbox / ".." / ".." / "escape")
-        proc = self.run_mail("export", rel, "--to", traversal)
-        self.assertEqual(proc.returncode, 2)
+        missing = self.home / "no_such_dir" / "deeper"
+        proc = self.run_mail("export", rel, "--to", str(missing))
+        self.assertEqual(proc.returncode, 3, proc.stderr)  # NOT_FOUND
+        self.assertIn("does not exist on this host", proc.stderr)
+        self.assertIn("mkdir", proc.stderr)  # tells the agent the way out
+        self.assertFalse(missing.exists(), "export must not mkdir")
+        self.assertFalse(missing.parent.exists(), "export must not mkdir -p")
 
-    def test_export_refuses_bare_outputs_dir_outside_a_session_mount(self):
-        """`export` is the room's ONLY egress, so the destination must be a real
-        Cowork session mount — not merely a directory that happens to be called
-        outputs/ or uploads/. A folder name is not a capability: ordinary project
-        directories are called `outputs` all the time (there is one in a sibling
-        repo on the maintainer's own machine), and `messageoperator_bash` runs an
-        unsandboxed shell as the user, so `mkdir ~/outputs` is a one-liner. If
-        the name alone were sufficient, a prompt-injected attachment could route
-        mail contents anywhere the user can write.
-
-        This is a REGRESSION GUARD, not a feature test. An autonomous fix loop
-        (PR #2, agent-fix/mail-1784888043) wrote a repro that exported into a
-        non-mount `.../outputs`, read the correct POLICY_REFUSAL as the bug, and
-        broadened SANDBOX_MOUNT_RE to `(?:^|[/\\])(outputs|uploads)(?:[/\\]|$)`
-        — deleting the boundary while leaving the comment that promised it. Every
-        CI gate stayed green, because the existing negative test only covers a
-        destination with no outputs/uploads segment at all. This closes that hole:
-        the paths below are mount-SHAPED but not mounts.
-        """
+    def test_export_requires_an_absolute_destination(self):
         _p, att_dir = self._received_with_attachment()
         rel = self.rel(att_dir / "Invoice.pdf")
-        for name in ("outputs", "uploads"):
-            bad = self.home / "some_project" / name
-            bad.mkdir(parents=True, exist_ok=True)
-            proc = self.run_mail("export", rel, "--to", str(bad))
-            self.assertEqual(
-                proc.returncode,
-                2,  # POLICY_REFUSAL
-                msg=f"export wrote outside a session mount via a bare {name}/ dir: "
-                f"stdout={proc.stdout!r} stderr={proc.stderr!r}",
-            )
-            self.assertFalse(
-                (bad / "Invoice.pdf").exists(),
-                msg=f"attachment leaked into {bad}",
-            )
+        proc = self.run_mail("export", rel, "--to", "relative/dir")
+        self.assertEqual(proc.returncode, 1, proc.stderr)  # USAGE
+        self.assertIn("ABSOLUTE", proc.stderr)
 
     def test_export_all_attachments_by_meta(self):
         # export by attachment paths listed in the meta (both files)
@@ -839,8 +899,8 @@ class BridgeUnavailableTests(MailCliTestBase):
         )
 
     def test_real_sandbox_export_still_works(self):
-        # the genuine Cowork/desktop mount (matches SANDBOX_MOUNT_RE, not
-        # VM-shaped) must still export — regression guard for the detection.
+        # the genuine Cowork/desktop mount (a real host dir, not VM-shaped)
+        # must still export — regression guard for the detection.
         att_dir = self._make_attachment()
         rel = self.rel(att_dir / "Invoice.pdf")
         self.run_mail("export", rel, "--to", str(self.sandbox), expect_code=0)
@@ -856,10 +916,12 @@ class TableVerbTests(MailCliTestBase):
 
     SCHEMA_VERSION = 1  # must match tabular_store.ts / mail.py
 
-    def _build_sidecar(self, db_path, sheets):
+    def _build_sidecar(self, db_path, sheets, generator=None):
         """sheets: list of dicts {name, header_row, columns:[(header,type)],
         rows:[[ (value, value_raw, native_type, formula) | scalar ]]}.
-        A scalar cell is shorthand for (str(v), str(v), 's', None)."""
+        A scalar cell is shorthand for (str(v), str(v), 's', None).
+        generator: the meta 'generator' value tabular_store.ts records —
+        'stdlib-dsv' marks a delimited source (enables type inference)."""
         import sqlite3
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -884,6 +946,11 @@ class TableVerbTests(MailCliTestBase):
             conn.execute(
                 "INSERT INTO meta(key,value) VALUES('source_sha',?)", ("testsha",)
             )
+            if generator is not None:
+                conn.execute(
+                    "INSERT INTO meta(key,value) VALUES('generator',?)",
+                    (generator,),
+                )
             for si, sheet in enumerate(sheets):
                 cols = sheet["columns"]
                 rows = sheet["rows"]
@@ -913,7 +980,7 @@ class TableVerbTests(MailCliTestBase):
         finally:
             conn.close()
 
-    def _attachment_with_sidecar(self, sheets, att_name="data.xlsx"):
+    def _attachment_with_sidecar(self, sheets, att_name="data.xlsx", generator=None):
         """Create attachments/<sha>/<att_name> + its .tabular.db; return the
         room-relative attachment path (what `mail table <path>` takes)."""
         sha = "abc123def456"
@@ -921,7 +988,9 @@ class TableVerbTests(MailCliTestBase):
         att_dir.mkdir(parents=True, exist_ok=True)
         att = att_dir / att_name
         att.write_bytes(b"PK\x03\x04 fake workbook bytes")
-        self._build_sidecar(att.with_name(att.name + ".tabular.db"), sheets)
+        self._build_sidecar(
+            att.with_name(att.name + ".tabular.db"), sheets, generator=generator
+        )
         return self.rel(att)
 
     # a small typed sheet: header row + numeric ids, a formula cell in col 2
@@ -1001,6 +1070,86 @@ class TableVerbTests(MailCliTestBase):
         self.assertEqual(data[0]["item"], "apples")
         self.assertEqual(data[0]["qty"], 3)
         self.assertEqual(data[0]["total"], 30)
+
+    # QA 2026-08-06, F4: a delimited source (generator 'stdlib-dsv') has no
+    # cell typing, so machine formats used to emit '"qty": "12"' — strings,
+    # contradicting SKILL.md's "numbers as numbers". Types are now inferred
+    # per column, strictly: EVERY stored value must be a plain decimal number.
+    DSV_INVOICE = {
+        "name": "csv",
+        "header_row": 0,
+        "columns": [
+            ("item", "s"),
+            ("qty", "s"),
+            ("total_eur", "s"),
+            ("code", "s"),
+            ("note", "s"),
+        ],
+        "rows": [
+            ["item", "qty", "total_eur", "code", "note"],
+            ["widget", "12", "2988.00", "00123", "rush"],
+            ["gadget", "3", "13.5", "9944", "batch 7"],
+        ],
+    }
+
+    def test_csv_records_infer_numeric_columns(self):
+        rel = self._attachment_with_sidecar(
+            [self.DSV_INVOICE], att_name="invoice.csv", generator="stdlib-dsv"
+        )
+        proc = self.run_mail(
+            "table", rel, "--sheet", "0", "--format", "records", expect_code=0
+        )
+        import json
+
+        data = json.loads(proc.stdout)
+        self.assertEqual(data[0]["qty"], 12)  # number, not "12"
+        self.assertEqual(data[0]["total_eur"], 2988)
+        self.assertEqual(data[1]["total_eur"], 13.5)
+        self.assertEqual(data[0]["item"], "widget")
+
+    def test_csv_inference_is_column_strict(self):
+        rel = self._attachment_with_sidecar(
+            [self.DSV_INVOICE], att_name="invoice.csv", generator="stdlib-dsv"
+        )
+        proc = self.run_mail(
+            "table", rel, "--sheet", "0", "--format", "records", expect_code=0
+        )
+        import json
+
+        data = json.loads(proc.stdout)
+        # "00123" has a leading zero -> the whole code column stays textual
+        self.assertEqual(data[0]["code"], "00123")
+        self.assertEqual(data[1]["code"], "9944")
+        # "batch 7" is not a number -> note column stays textual
+        self.assertEqual(data[1]["note"], "batch 7")
+
+    def test_csv_schema_listing_shows_inferred_types(self):
+        rel = self._attachment_with_sidecar(
+            [self.DSV_INVOICE], att_name="invoice.csv", generator="stdlib-dsv"
+        )
+        out = self.run_mail("table", rel, expect_code=0).stdout
+        self.assertIn("qty:n", out)
+        self.assertIn("total_eur:n", out)
+        self.assertIn("code:s", out)
+        self.assertIn("note:s", out)
+
+    def test_workbook_text_typed_digits_stay_strings(self):
+        # a SPREADSHEET column deliberately typed text (zip codes) must not be
+        # coerced: inference applies to delimited sources only
+        sheet = {
+            "name": "Zips",
+            "header_row": 0,
+            "columns": [("zip", "s")],
+            "rows": [["zip"], ["12345"], ["98765"]],
+        }
+        rel = self._attachment_with_sidecar([sheet], generator="sheetjs-0.20.3")
+        proc = self.run_mail(
+            "table", rel, "--sheet", "0", "--format", "records", expect_code=0
+        )
+        import json
+
+        data = json.loads(proc.stdout)
+        self.assertEqual(data[0]["zip"], "12345")
 
     def test_jsonl_one_object_per_line(self):
         rel = self._attachment_with_sidecar([self.ORDERS])
@@ -1222,6 +1371,79 @@ class TableVerbTests(MailCliTestBase):
         out = proc.stdout
         self.assertIn("Orders", out)
         self.assertIn("2 rows × 3 cols", out)
+
+
+class PerVerbHelpTests(MailCliTestBase):
+    """QA 2026-08-06, F9: `mail <verb> --help` used to exit 1 with the usage
+    string on stderr — a help request indistinguishable from a usage error."""
+
+    def test_verb_help_exits_zero_and_prints_the_stanza(self):
+        proc = self.run_mail("compose", "--help", expect_code=0)
+        self.assertIn("mail compose", proc.stdout)
+        self.assertIn("--cc", proc.stdout)
+        self.assertEqual(proc.stderr, "")
+
+    def test_verb_help_includes_every_stanza_of_the_verb(self):
+        proc = self.run_mail("table", "--help", expect_code=0)
+        self.assertIn("--sheet", proc.stdout)  # second stanza
+        self.assertIn("--format", proc.stdout)
+
+    def test_dash_h_works_too(self):
+        proc = self.run_mail("export", "-h", expect_code=0)
+        self.assertIn("mail export", proc.stdout)
+
+    def test_global_help_unchanged(self):
+        proc = self.run_mail("--help", expect_code=0)
+        self.assertIn("usage: mail <verb>", proc.stdout)
+
+    def test_a_later_help_argument_is_the_verbs_to_handle(self):
+        # only argv[1] triggers the help path: a "--help" further along goes
+        # to the verb like any other argument (here: compose rejects it as an
+        # unknown flag on stderr, exit 1 — NOT a help printout on stdout)
+        self.account_dir("me@adeu.ai")
+        body = self.room / "hbody.txt"
+        body.write_text("Hi.\n")
+        proc = self.run_mail(
+            "compose",
+            "me@adeu.ai",
+            "to@example.com",
+            "--help",
+            self.rel(body),
+            expect_code=1,
+        )
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("unknown argument", proc.stderr)
+
+
+class ReadHeaderDisplayTests(MailCliTestBase):
+    def test_folded_rfc2047_subject_displays_with_single_space(self):
+        """QA 2026-08-06, F5: Graph folds long RFC 2047 subjects onto a
+        continuation line ('Subject:\\r\\n =?utf-8?B?...'); unfolding keeps the
+        fold's leading space, so `mail read` printed 'Subject:  QA...' (two
+        spaces) while index/search TSV normalized to one — breaking string
+        comparison between the two surfaces."""
+        import base64
+
+        subject = "QA-S2 Tarjouspyyntö — pitkä otsikkorivi"
+        token = base64.b64encode(subject.encode("utf-8")).decode("ascii")
+        raw = (
+            "From: sender@vendor.com\r\n"
+            "To: me@adeu.ai\r\n"
+            "Subject:\r\n"
+            f" =?utf-8?B?{token}?=\r\n"
+            "Date: Mon, 06 Jul 2026 10:00:00 +0000\r\n"
+            "Message-ID: <folded-subject@x.com>\r\n"
+            "MIME-Version: 1.0\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n"
+            "body\r\n"
+        )
+        src = self.write_inbound("me@adeu.ai", "300.cccc.eml", raw)
+        proc = self.run_mail("read", self.rel(src), expect_code=0)
+        subject_lines = [
+            l for l in proc.stdout.splitlines() if l.startswith("Subject:")
+        ]
+        self.assertEqual(subject_lines, [f"Subject: {subject}"])
 
 
 class ReadPaginationTests(MailCliTestBase):

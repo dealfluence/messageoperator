@@ -262,6 +262,83 @@ describe("connection error handling", () => {
   });
 });
 
+describe("bcc handling on the smtp wire", () => {
+  it("stripBccHeader removes Bcc and its continuation lines only", async () => {
+    const { stripBccHeader } = await import("../src/gmail.js");
+    const mime = Buffer.from(
+      "From: a@gmail.com\r\n" +
+        "To: to@example.com\r\n" +
+        "Bcc: hidden@example.com,\r\n" +
+        " second-hidden@example.com\r\n" +
+        "Subject: hi\r\n" +
+        "\r\n" +
+        "Body stays byte-identical.\r\n",
+      "latin1",
+    );
+    const out = stripBccHeader(mime).toString("latin1");
+    expect(out).toBe(
+      "From: a@gmail.com\r\n" +
+        "To: to@example.com\r\n" +
+        "Subject: hi\r\n" +
+        "\r\n" +
+        "Body stays byte-identical.\r\n",
+    );
+  });
+
+  it("a Bcc that is the LAST header leaves no stray blank line", async () => {
+    const { stripBccHeader } = await import("../src/gmail.js");
+    const mime = Buffer.from(
+      "From: a@gmail.com\r\nTo: t@x.com\r\nBcc: h@x.com\r\n\r\nBody\r\n",
+      "latin1",
+    );
+    expect(stripBccHeader(mime).toString("latin1")).toBe(
+      "From: a@gmail.com\r\nTo: t@x.com\r\n\r\nBody\r\n",
+    );
+  });
+
+  it("a message without Bcc passes through byte-identical", async () => {
+    const { stripBccHeader } = await import("../src/gmail.js");
+    const mime = Buffer.from(
+      "From: a@gmail.com\r\nTo: t@x.com\r\nSubject: s\r\n\r\nBody\r\n",
+      "latin1",
+    );
+    expect(stripBccHeader(mime).equals(mime)).toBe(true);
+  });
+
+  it("sendMime strips Bcc from the wire but keeps it in the envelope", async () => {
+    const { sendMime } = await import("../src/gmail.js");
+    const layout = makeLayout();
+    const cfg = makeConfig({ accounts: [ACCT] });
+    const sent: { envelopeTo: string[]; wire: Buffer }[] = [];
+    const mime = Buffer.from(
+      "From: a@gmail.com\r\n" +
+        "To: to@example.com\r\n" +
+        "Bcc: hidden@example.com\r\n" +
+        "Subject: hi\r\n" +
+        "\r\n" +
+        "Body\r\n",
+      "latin1",
+    );
+    await sendMime(
+      layout,
+      cfg,
+      ACCT,
+      mime,
+      ["to@example.com", "hidden@example.com"],
+      {
+        getPassword: async () => "abcdabcdabcdabcd",
+        smtpSender: async ({ envelopeTo, wire }) => {
+          sent.push({ envelopeTo, wire });
+        },
+      },
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.envelopeTo).toContain("hidden@example.com");
+    expect(sent[0]!.wire.toString("latin1")).not.toMatch(/^bcc\s*:/im);
+    expect(sent[0]!.wire.toString("latin1")).toContain("To: to@example.com");
+  });
+});
+
 describe("on-demand body fetch (gmail)", () => {
   class FakeAllMailFetch implements GmailClientLike {
     searches: object[] = [];

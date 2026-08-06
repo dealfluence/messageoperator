@@ -53,7 +53,11 @@ disk are only the bodies downloaded so far.
 - `mail reply <id-or-path> body.txt` — threaded reply draft into Drafts;
   prints the draft path. Write the body to a file first (e.g. with
   messageoperator_create_file). The source body must be on disk — fetch it first.
-- `mail compose a@b.com to@x.com "Subject" body.txt` — new draft.
+- `mail compose a@b.com to@x.com "Subject" body.txt [--cc addr]... [--bcc addr]...` —
+  new draft. `--cc`/`--bcc` may be repeated or take a comma-separated list.
+  Editing the draft file before `mail send` is also supported (e.g. adding a
+  `Cc:` header or adjusting the body): recipients and content are read from
+  the draft itself at send time.
 - `mail send <draft-path> [--attach attachments/<sha>/file.pdf]` — queue for
   delivery. Refuses anything not under Drafts/. Attachment paths must live
   under `attachments/` — copy a file there first if you generated it
@@ -105,11 +109,13 @@ disk are only the bodies downloaded so far.
   file without giving a path, FIND it first with `messageoperator_bash` (`ls`, `find`) —
   the shell is not limited to the room — then import the path you found. Do not
   tell the user you cannot reach their files; check first.
-- `mail export <id-or-attachment-path> --to <sandbox-dir> [--name <file>]` —
-  copy a RECEIVED attachment out to your sandbox so your skills can open it
-  (e.g. to read/compile received `.xlsx` files, which have no in-room view).
-  `<id>` exports every attachment on the message; `--name` picks one. `--to`
-  must be your sandbox's outputs (or uploads) folder.
+- `mail export <id-or-attachment-path> --to <absolute-dir> [--name <file>]` —
+  copy a RECEIVED attachment out of the room: to your sandbox's outputs (or
+  uploads) folder so your skills can open it, or — when no sandbox is in
+  play — to any folder that ALREADY EXISTS on the user's machine (e.g. their
+  Downloads). Export never creates directories; `mkdir -p` the destination
+  first if it is new. `<id>` exports every attachment on the message;
+  `--name` picks one.
 - `mail settings` — open the Message Operator settings page in the user's browser
   (dry run on/off, allowed recipient domains, removing mailboxes). Run it
   whenever the user wants to change how sending works or disconnect an
@@ -207,9 +213,10 @@ sandbox's files. A file in one is invisible to the other until you bridge it:
   received spreadsheets, feed it to a skill): received attachments are
   extracted into `attachments/<sha>/` inside the room, which your sandbox
   cannot read. Run `mail export <id> --to <your-sandbox-outputs-dir>` to copy
-  them where your skills can open them. `.pdf`/`.docx` also have in-room
-  Markdown views (below); `.xlsx`/`.csv` do not, so export them and use the
-  spreadsheet skill.
+  them where your skills can open them. With no sandbox in play, export to an
+  existing folder on the user's machine instead. `.pdf`/`.docx` also have
+  in-room Markdown views (below); `.xlsx`/`.csv` have `mail table` and a
+  `.md` view in-room, so exporting them is only needed for outside tooling.
 
 Pass the ABSOLUTE sandbox path you already know (your outputs/uploads
 directory) — do not guess. Never claim a file was emailed or read across the
@@ -294,7 +301,11 @@ drill in:
   tools.
 - By default the machine formats emit the RAW underlying values (numbers as
   numbers), best for computing. Add `--formatted` to get the display text
-  instead (e.g. `$1,234.00` rather than `1234`).
+  instead (e.g. `$1,234.00` rather than `1234`). Spreadsheet cells carry
+  their own types; CSV/TSV do not, so their numeric columns are inferred
+  strictly — a column is numeric only when EVERY value in it is a plain
+  decimal number, and leading-zero codes (`00123`) or mixed columns stay
+  strings.
 - `--formulas` — show each cell's FORMULA instead of its value. Use this when
   the question is about HOW a number was derived, not just what it is.
 - `--header-row N` overrides the auto-detected header row; `--header-row -1`
@@ -329,6 +340,12 @@ says what actually happened: `SENT` (delivered), `SIMULATED` (dry_run on),
 or `REJECTED (reason)` (draft returned with a `.rejected.txt`). The same
 field carries FETCHED / ARCHIVED / MARKED READ / MARKED UNREAD / PACKED
 outcomes for the other queued verbs.
+
+**A SENT message may not appear in `mail index`/`mail search` for a few
+commands** — it only shows up once the provider's own Sent copy syncs back.
+NEVER resend because a search came back empty: `send_results: SENT` means the
+mail was delivered, and sending again creates a real duplicate email in the
+recipient's inbox. To verify a send, trust `send_results` — not a search.
 
 ## Auth is lazy — relay it honestly
 

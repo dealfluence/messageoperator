@@ -440,6 +440,96 @@ describe("storeMessage", () => {
     expect(meta).not.toContain("X-Messageoperator-Attachment-Tables:");
   });
 
+  /**
+   * QA 2026-08-06, F3: an accepted send leaves the moved draft in Sent/cur
+   * (finishSend, no .meta, never indexed); when the provider's own Sent copy
+   * syncs in (same Message-ID, different bytes), the draft copy must go, or
+   * every filesystem-level script double-counts sent mail.
+   */
+  describe("sent draft dedupe", () => {
+    const MSG_ID = "<sent-42@example.com>";
+
+    function sentCurDir(layout: ReturnType<typeof makeLayout>) {
+      const dir = path.join(
+        layout.accounts,
+        "a@example.com",
+        "mail",
+        "Sent",
+        "cur",
+      );
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    }
+
+    it("removes the meta-less moved draft when the synced copy lands", async () => {
+      const layout = makeLayout();
+      const index = makeIndex(layout);
+      const ledger = makeLedger(layout);
+      const dir = sentCurDir(layout);
+      // what finishSend leaves behind: the draft bytes, no .meta
+      const draftRaw = sampleEml({ messageId: MSG_ID, subject: "deal" });
+      const draftPath = path.join(dir, `100.${sha12(draftRaw)}.eml`);
+      fs.writeFileSync(draftPath, draftRaw);
+      // the provider's copy: same Message-ID, provider-added header -> new sha
+      const syncedRaw = sampleEml({
+        messageId: MSG_ID,
+        subject: "deal",
+        extraHeaders: ["X-Provider: added-on-delivery"],
+      });
+      const explained = new Set<string>();
+      const dest = await storeMessage(layout, index, ledger, {
+        account: "a@example.com",
+        folder: "Sent",
+        raw: syncedRaw,
+        explained,
+      });
+      expect(dest).not.toBeNull();
+      expect(fs.existsSync(draftPath)).toBe(false);
+      expect(fs.existsSync(dest!)).toBe(true);
+      const dedupes = ledger
+        .readAll()
+        .filter((r) => r.op === "sent_draft_deduped");
+      expect(dedupes).toHaveLength(1);
+      expect(explained.has(layout.rel(draftPath))).toBe(true);
+    });
+
+    it("leaves meta-less files with a different Message-ID alone", async () => {
+      const layout = makeLayout();
+      const index = makeIndex(layout);
+      const ledger = makeLedger(layout);
+      const dir = sentCurDir(layout);
+      const otherRaw = sampleEml({ messageId: "<other-7@example.com>" });
+      const otherPath = path.join(dir, `100.${sha12(otherRaw)}.eml`);
+      fs.writeFileSync(otherPath, otherRaw);
+      await storeMessage(layout, index, ledger, {
+        account: "a@example.com",
+        folder: "Sent",
+        raw: sampleEml({ messageId: MSG_ID }),
+      });
+      expect(fs.existsSync(otherPath)).toBe(true);
+    });
+
+    it("never removes an indexed (.meta-bearing) message", async () => {
+      const layout = makeLayout();
+      const index = makeIndex(layout);
+      const ledger = makeLedger(layout);
+      const dir = sentCurDir(layout);
+      const keptRaw = sampleEml({ messageId: MSG_ID, subject: "keep me" });
+      const keptPath = path.join(dir, `100.${sha12(keptRaw)}.eml`);
+      fs.writeFileSync(keptPath, keptRaw);
+      fs.writeFileSync(keptPath + ".meta", "X-Messageoperator-Sha: x\n\n\n");
+      await storeMessage(layout, index, ledger, {
+        account: "a@example.com",
+        folder: "Sent",
+        raw: sampleEml({
+          messageId: MSG_ID,
+          extraHeaders: ["X-Provider: added"],
+        }),
+      });
+      expect(fs.existsSync(keptPath)).toBe(true);
+    });
+  });
+
   it("adds explained paths for the audit", async () => {
     const layout = makeLayout();
     const index = makeIndex(layout);
