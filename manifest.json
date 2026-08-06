@@ -34,7 +34,7 @@
     "dry_run": {
       "type": "boolean",
       "title": "Dry run (simulate sends)",
-      "description": "When on, everything works except the actual network send — outgoing mail is simulated and ledgered. Turn off only after a test run looks right.",
+      "description": "When on, outgoing mail is simulated and ledgered. Turn off only after a test run looks right.",
       "default": true,
       "required": false
     },
@@ -47,7 +47,7 @@
     "state_home": {
       "type": "directory",
       "title": "State directory",
-      "description": "Where the mail room and broker state live. Leave empty for the default: ~/messageoperator, or an existing ~/mailroom from a pre-rename install (picked up automatically).",
+      "description": "Where the mail room and broker state live. Leave empty for the default: ~/messageoperator.",
       "required": false
     }
   },
