@@ -43,6 +43,16 @@ await build({
   bundle: false,
 });
 
+// worker entries (e.g. pack_worker.mjs) are plain .mjs — spawned via
+// `new URL(..., import.meta.url)`, never imported — so esbuild skips them
+// and they ship verbatim next to their compiled callers
+for (const f of readdirSync(src, { recursive: true }).map(String)) {
+  if (f.endsWith(".mjs") && !f.startsWith("room_assets")) {
+    mkdirSync(path.dirname(path.join(dist, f)), { recursive: true });
+    copyFileSync(path.join(src, f), path.join(dist, f));
+  }
+}
+
 cpSync(path.join(src, "room_assets"), path.join(dist, "room_assets"), {
   recursive: true,
 });

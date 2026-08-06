@@ -10,15 +10,14 @@
  */
 
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 
 import {
   BatchValidationError,
   DocumentObject,
   RedlineEngine,
-  extractTextFromBuffer,
   generate_edits_from_text,
 } from "@adeu/core";
-import pdfParse from "pdf-parse/lib/pdf-parse.js";
 
 import {
   parseDelimited,
@@ -30,9 +29,118 @@ import {
 /** Tracked-changes author for packed edits. */
 export const PACK_AUTHOR = "AI Agent";
 
+/*
+ * PDF/DOCX extraction runs in a worker thread (pack_worker.mjs), never on
+ * this thread. Two reasons, both observed live under Claude Desktop:
+ *  - pdf.js (inside pdf-parse) writes recoverable-oddity warnings with
+ *    console.log; in `serve` this thread's stdout is the MCP JSON-RPC
+ *    channel, and one stray line is an "Invalid JSON-RPC message from
+ *    child" in the host. The worker's stdout is captured and rerouted to
+ *    the stderr log instead.
+ *  - parsing is CPU-bound; on this thread a large attachment stalled the
+ *    event loop (and every in-flight tool call) for seconds.
+ *
+ * One lazy singleton worker, replaced if it dies or wedges. It is unref()ed
+ * whenever idle so `broker --once` and tests exit normally; in-flight
+ * requests ref() it, because a pending promise alone does not keep Node
+ * alive.
+ */
+
+/** Generous: covers a huge scan on a slow disk, yet a wedged parse cannot
+ * pin the broker cycle forever. */
+const EXTRACT_TIMEOUT_MS = 120_000;
+
+interface PendingExtraction {
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+interface WorkerReply {
+  id: number;
+  ok: boolean;
+  text?: string;
+  error?: string;
+}
+
+let extractionWorker: Worker | null = null;
+let nextRequestId = 1;
+const pendingExtractions = new Map<number, PendingExtraction>();
+
+/** Reject everything in flight and drop the singleton so the next call
+ * spawns a fresh worker. Safe to call for an already-replaced worker. */
+function failExtractionWorker(w: Worker, err: Error): void {
+  if (extractionWorker === w) extractionWorker = null;
+  const pending = [...pendingExtractions.values()];
+  pendingExtractions.clear();
+  for (const p of pending) {
+    clearTimeout(p.timer);
+    p.reject(err);
+  }
+}
+
+function ensureExtractionWorker(): Worker {
+  if (extractionWorker) return extractionWorker;
+  const w = new Worker(new URL("./pack_worker.mjs", import.meta.url), {
+    // detach the worker's stdout from this process's stdout (the MCP
+    // channel). The worker reroutes its own chatter to stderr; nobody may
+    // consume w.stdout here — a consumed worker stdio stream holds this
+    // process's event loop open even after unref(), hanging `broker --once`
+    stdout: true,
+  });
+  w.on("message", (msg: WorkerReply) => {
+    const p = pendingExtractions.get(msg.id);
+    if (!p) return;
+    pendingExtractions.delete(msg.id);
+    clearTimeout(p.timer);
+    if (pendingExtractions.size === 0) w.unref();
+    if (msg.ok) p.resolve(msg.text ?? "");
+    else p.reject(new Error(msg.error ?? "document extraction failed"));
+  });
+  w.on("error", (err) => {
+    failExtractionWorker(w, new Error(`extraction worker error: ${err}`));
+  });
+  w.on("exit", (code) => {
+    failExtractionWorker(w, new Error(`extraction worker exited (${code})`));
+  });
+  w.unref();
+  extractionWorker = w;
+  return w;
+}
+
+function extractInWorker(
+  kind: "pdf" | "docx",
+  content: Buffer,
+): Promise<string> {
+  const w = ensureExtractionWorker();
+  const id = nextRequestId++;
+  // zero-offset copy: postMessage would otherwise clone the whole pooled
+  // slab behind a small Buffer view; transferring the copy avoids a second
+  // one on the worker side
+  const copy = new Uint8Array(content.byteLength);
+  copy.set(content);
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // a wedged parse takes its worker down with it; concurrent requests
+      // on the same worker fail with it rather than hang
+      void w.terminate();
+      failExtractionWorker(
+        w,
+        new Error(
+          `document extraction timed out after ${EXTRACT_TIMEOUT_MS / 1000}s`,
+        ),
+      );
+    }, EXTRACT_TIMEOUT_MS);
+    pendingExtractions.set(id, { resolve, reject, timer });
+    w.ref();
+    w.postMessage({ id, kind, content: copy }, [copy.buffer]);
+  });
+}
+
 export async function extractDocxMarkdown(buffer: Buffer): Promise<string> {
   // cleanView=false: pending tracked changes surface as CriticMarkup
-  return extractTextFromBuffer(buffer, false);
+  // (applied worker-side in pack_worker.mjs)
+  return extractInWorker("docx", buffer);
 }
 
 /**
@@ -48,13 +156,8 @@ export const NO_PDF_TEXT_VIEW =
   "view; it needs OCR to be readable as text.)_";
 
 export async function extractPdfMarkdown(buffer: Buffer): Promise<string> {
-  // pdf.js reads the underlying ArrayBuffer from position 0, so a Buffer
-  // with a nonzero byteOffset (any pooled Node buffer, and readFileSync's
-  // 8-byte offset) parses shifted garbage; hand it a byteOffset-0 copy
-  const copy = new Uint8Array(buffer.length);
-  copy.set(buffer);
-  const parsed = await pdfParse(copy as Buffer);
-  return (parsed.text ?? "").trim() || NO_PDF_TEXT_VIEW;
+  const text = await extractInWorker("pdf", buffer);
+  return text.trim() || NO_PDF_TEXT_VIEW;
 }
 
 /**

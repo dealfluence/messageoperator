@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   extractDocxMarkdown,
@@ -45,6 +45,68 @@ describe("markdown extraction", () => {
   it("asViewFile normalizes to exactly one trailing newline", () => {
     expect(asViewFile("text")).toBe("text\n");
     expect(asViewFile("text\n\n")).toBe("text\n");
+  });
+});
+
+describe("extraction never touches this process's stdout", () => {
+  /**
+   * In `serve` mode stdout is the MCP JSON-RPC channel. pdf.js (bundled
+   * inside pdf-parse) reports recoverable oddities with console.log — e.g.
+   * "Warning: Indexing all PDF objects" for a damaged xref — and any such
+   * line between frames surfaces in Claude Desktop as
+   * "Invalid JSON-RPC message from child". Extraction must therefore run
+   * where its chatter cannot reach this process's stdout, whether the parse
+   * ultimately succeeds or not.
+   */
+  function captureStdout(): { writes: string[]; restore: () => void } {
+    const writes: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      writes.push(args.map(String).join(" "));
+    });
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: unknown,
+    ) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    return {
+      writes,
+      restore: () => {
+        writeSpy.mockRestore();
+        logSpy.mockRestore();
+      },
+    };
+  }
+
+  it("a PDF that makes pdf.js warn leaks nothing to console/stdout", async () => {
+    // valid objects, broken startxref offset: pdf.js announces its recovery
+    // scan with console.log before deciding whether the parse succeeds
+    const quirky = Buffer.from(
+      samplePdf("Hello quirky world")
+        .toString("latin1")
+        .replace(/startxref\n\d+/, "startxref\n999999"),
+      "latin1",
+    );
+    const captured = captureStdout();
+    try {
+      // parse outcome is irrelevant (store.ts isolates a failed view);
+      // the assertion is that nothing crossed onto our stdout
+      await extractPdfMarkdown(quirky).catch(() => undefined);
+      expect(captured.writes).toEqual([]);
+    } finally {
+      captured.restore();
+    }
+  });
+
+  it("a clean extraction is equally silent", async () => {
+    const captured = captureStdout();
+    try {
+      const text = await extractPdfMarkdown(samplePdf("quiet"));
+      expect(text).toContain("quiet");
+      expect(captured.writes).toEqual([]);
+    } finally {
+      captured.restore();
+    }
   });
 });
 
