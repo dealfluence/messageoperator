@@ -133,8 +133,15 @@ export function outcomeChips(records: LedgerRecord[]): Chip[] {
           text: `Login rejected for ${typeof d.address === "string" ? d.address : "?"} — ${reason}`,
         });
         break;
+      // A composed draft is LOCAL: Drafts/ is room-owned and never mirrored to
+      // the provider, so the user cannot see this yet. The chip has to say so —
+      // a bare "Draft saved" reads as a finished, user-visible action and is
+      // what led agents to report drafts the user could never find.
       case "draft_created":
-        chips.push({ kind: "draft", text: "Draft saved" });
+        chips.push({
+          kind: "draft_local",
+          text: "Draft saved in the room (not in the user's mail client yet)",
+        });
         break;
       // DraftBox: a draft filed with (or removed from) the provider. Distinct
       // from draft_created, which only wrote a local file in the room.

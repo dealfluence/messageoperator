@@ -50,14 +50,25 @@ disk are only the bodies downloaded so far.
   Terms AND together, match word prefixes (`invoi` finds `invoices`),
   `"quoted phrases"` and `-negated` terms work; at least one term must be
   positive. Same TSV columns as index.
-- `mail reply <id-or-path> body.txt` — threaded reply draft into Drafts;
-  prints the draft path. Write the body to a file first (e.g. with
-  messageoperator_create_file). The source body must be on disk — fetch it first.
+- `mail reply <id-or-path> body.txt` — threaded reply draft into the room's
+  LOCAL Drafts/ (not the user's mail client — see "Drafts are local until you
+  file them" below); prints the draft path. Write the body to a file first
+  (e.g. with messageoperator_create_file). The source body must be on disk —
+  fetch it first.
 - `mail compose a@b.com to@x.com "Subject" body.txt [--cc addr]... [--bcc addr]...` —
-  new draft. `--cc`/`--bcc` may be repeated or take a comma-separated list.
-  Editing the draft file before `mail send` is also supported (e.g. adding a
-  `Cc:` header or adjusting the body): recipients and content are read from
-  the draft itself at send time.
+  new draft in the room's LOCAL Drafts/, invisible to the user until you run
+  `mail draft` on it. `--cc`/`--bcc` may be repeated or take a comma-separated
+  list. Editing the draft file before `mail send` is also supported (e.g.
+  adding a `Cc:` header or adjusting the body): recipients and content are read
+  from the draft itself at send time.
+- `mail draft <draft-path>` — upload a local draft into the user's OWN provider
+  Drafts folder (Gmail Drafts / Outlook Drafts), so they can see, edit and send
+  it from their normal mail client. NEVER sends. Refuses anything not under
+  Drafts/; the outcome (DRAFT UPLOADED / SIMULATED / REJECTED) rides in the
+  tool result. **This is the command that makes a draft real to the user.**
+- `mail draft-delete <account> <message-id>` — reversibly remove a
+  provider-side draft: the broker moves it to Trash / Deleted Items. Never
+  hard-deletes. Use it to retract a draft you filed by mistake.
 - `mail send <draft-path> [--attach attachments/<sha>/file.pdf]` — queue for
   delivery. Refuses anything not under Drafts/. Attachment paths must live
   under `attachments/` — copy a file there first if you generated it
@@ -315,6 +326,38 @@ Typical flow for "compile these attached spreadsheets into one document": for
 each message, `mail table <id>` to see the sheets, then
 `mail table <id> --sheet 0 --format records` to pull the data as objects,
 reason over it, and generate
+
+## Drafts are LOCAL until you file them — the compose → draft → send flow
+
+`Drafts/` is the room's OWN folder. It is not a mirror of the user's provider
+Drafts: the user's real drafts are never synced down into it, and a draft you
+write there is not synced up. The user CANNOT SEE anything in `Drafts/`.
+
+A draft therefore has three possible fates, and writing the file is only the
+first step of all of them:
+
+1. `mail compose` / `mail reply` — writes the .eml into `Drafts/`. **Local
+   only. Nothing has happened from the user's point of view yet.**
+2. `mail draft <path>` — files it into the user's provider Drafts folder. NOW
+   they can see it in Gmail/Outlook, edit it, and send it themselves.
+3. `mail send <path>` — delivers it.
+
+**When the user asks you to "draft" / "prepare" / "write" a message for them —
+anything they expect to review or send themselves — `mail compose` ALONE DOES
+NOT DO IT. You MUST follow it with `mail draft <path>`.** Otherwise the draft
+exists only inside this room, the user opens their mail client, finds nothing,
+and you have reported success for something that never happened. Reporting
+"draft created" after `mail compose` alone is a FALSE SUCCESS REPORT.
+
+Only skip step 2 when you are composing purely as the setup for an immediate
+`mail send` in your next command — there the draft is a transient staging file
+the user never needs to see.
+
+The authoritative confirmation is the tool result: `mail compose` reports only
+`Draft saved in the room (not in the user's mail client yet)`, while a filed
+draft reports `DRAFT UPLOADED` in `send_results`. If you did not see
+`DRAFT UPLOADED`, the user has no draft. The broker also raises an alert on any
+draft left sitting unresolved in `Drafts/` — if you see it, you skipped a step.
 
 `mail send` never sends. It moves your draft to Outbox/ and queues an intent;
 the broker checks policy and delivers when your current command finishes.

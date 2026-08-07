@@ -272,6 +272,128 @@ describe("boundary broker", () => {
     broker.close();
   });
 
+  /**
+   * Janne's report, 2026-08-07, reproduced end to end on a live Gmail account:
+   * the agent ran `mail compose`, reported "draft created", and the user's
+   * Gmail Drafts folder stayed empty. Nothing was broken — `mail draft` files a
+   * draft with the provider correctly — but nothing in the room ever told the
+   * agent that step existed, so it reported success for a draft only it could
+   * see.
+   *
+   * Drafts/ is room-owned and outside provider reconciliation (SYNCABLE_FOLDERS
+   * in state.ts) by design, and that is not changing: auto-filing every compose
+   * would litter the user's Drafts with a copy of every message the agent ever
+   * sends. So the room has to SAY so instead. Both resolving verbs move the
+   * .eml out of Drafts/, which makes "still there at end of cycle" an exact,
+   * self-clearing signal.
+   */
+  describe("stranded local drafts (2026-08-07)", () => {
+    const readNotices = (broker: Broker): string[] =>
+      JSON.parse(
+        fs.readFileSync(
+          path.join(broker.layout.room, ".broker-status.json"),
+          "utf-8",
+        ),
+      ).notices ?? [];
+
+    /** What `mail compose` leaves behind: an .eml in Drafts/, no intent file. */
+    function compose(
+      broker: Broker,
+      name: string,
+      address = "a@gmail.com",
+    ): string {
+      const dir = path.join(
+        broker.layout.accounts,
+        address,
+        "mail",
+        "Drafts",
+        "cur",
+      );
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, sampleEml({ subject: "Testiviesti" }));
+      return file;
+    }
+
+    it("says nothing while no draft is waiting", async () => {
+      const broker = await makeBroker();
+      await broker.runCycle({ syncNetwork: false });
+      expect(readNotices(broker)).toEqual([]);
+      broker.close();
+    });
+
+    it("names the unresolved draft and the verb that resolves it", async () => {
+      const broker = await makeBroker();
+      await broker.runCycle({ syncNetwork: false }); // bootstrap accounts
+      compose(broker, "100.aaaabbbbcccc.eml");
+      await broker.runCycle({ syncNetwork: false });
+
+      const notices = readNotices(broker);
+      expect(notices).toHaveLength(1);
+      const [notice] = notices;
+      // the path to act on, the verb to act with, and why it matters
+      expect(notice).toContain("100.aaaabbbbcccc.eml");
+      expect(notice).toContain("mail draft");
+      expect(notice).toMatch(/not in the user's mail client/i);
+      broker.close();
+    });
+
+    it("clears itself once the draft leaves Drafts/", async () => {
+      const broker = await makeBroker();
+      await broker.runCycle({ syncNetwork: false });
+      const file = compose(broker, "101.ddddeeeeffff.eml");
+      await broker.runCycle({ syncNetwork: false });
+      expect(readNotices(broker)).toHaveLength(1);
+
+      // what `mail draft` does: moves the .eml out of Drafts/ into DraftBox/
+      queueDraftUpload(broker.layout, "a@gmail.com", fs.readFileSync(file));
+      fs.rmSync(file);
+      await broker.runCycle({ syncNetwork: false });
+
+      expect(readNotices(broker)).toEqual([]);
+      broker.close();
+    });
+
+    /**
+     * Janne's own case was on a DISCONNECTED account. Removing a mailbox keeps
+     * its maildir as a local archive, so its old drafts stay on disk forever
+     * and `mail draft` on them is rejected — a notice there could never be
+     * cleared, only ignored, which is how agents learn to ignore all of them.
+     */
+    it("ignores a removed mailbox's local archive", async () => {
+      const broker = await makeBroker();
+      await broker.runCycle({ syncNetwork: false });
+      broker.layout.ensureAccount("gone@gmail.com"); // on disk, not in config
+      compose(broker, "103.444455556666.eml", "gone@gmail.com");
+      await broker.runCycle({ syncNetwork: false });
+
+      const status = JSON.parse(
+        fs.readFileSync(
+          path.join(broker.layout.room, ".broker-status.json"),
+          "utf-8",
+        ),
+      );
+      // the account tree is on disk but is not a connected mailbox
+      expect(status.accounts).toContain("gone@gmail.com");
+      expect(status.connected_accounts).not.toContain("gone@gmail.com");
+      expect(status.notices).toEqual([]);
+      broker.close();
+    });
+
+    it("stays quiet about a draft handed back after a rejection", async () => {
+      const broker = await makeBroker();
+      await broker.runCycle({ syncNetwork: false });
+      const file = compose(broker, "102.111122223333.eml");
+      // a rejected upload returns the body with its reason beside it; that
+      // failure already gets its own chip, so nagging would bury the reason
+      fs.writeFileSync(`${file}.rejected.txt`, "Reason: recipient_not_allowed");
+      await broker.runCycle({ syncNetwork: false });
+
+      expect(readNotices(broker)).toEqual([]);
+      broker.close();
+    });
+  });
+
   it("processes a queued send on push and reports the outcome", async () => {
     const broker = await makeBroker();
     await broker.runCycle({ syncNetwork: false }); // baseline

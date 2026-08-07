@@ -45,12 +45,34 @@ describe("outcomeChips", () => {
       "packed",
       "fetched",
       "login",
-      "draft",
+      "draft_local",
     ]);
     expect(chips[0]!.text).toBe("Sent to a@b.com");
     expect(chips[2]!.text).toContain("recipient_not_allowed");
     expect(chips[3]!.text).toBe("Archived 1.eml");
     expect(chips[4]!.text).toContain("4 tracked change(s)");
+  });
+
+  /**
+   * Janne's report, 2026-08-07: the agent ran `mail compose`, saw a chip that
+   * said "Draft saved", and told the user their draft was ready. It was not —
+   * Drafts/ is room-owned and never mirrored to the provider, so the user's
+   * Gmail Drafts folder stayed empty. Reproduced end to end on a live account.
+   *
+   * A local draft and a filed draft must never be describable in the same
+   * words: the local one has to disclose that the user cannot see it yet, and
+   * must not share a chip kind with the provider-side one (the UI colors by
+   * kind, so an identical kind reads as an identical degree of doneness).
+   */
+  it("does not let a LOCAL draft read as a user-visible one", () => {
+    const [local] = outcomeChips([rec("draft_created")]);
+    const [filed] = outcomeChips([
+      rec("draft_uploaded", { account: "a@b.com", channel: "gmail" }),
+    ]);
+
+    expect(local!.text).toMatch(/not in the user's mail client|room/i);
+    expect(local!.kind).not.toBe(filed!.kind);
+    expect(filed!.text).toMatch(/gmail Drafts/);
   });
 
   it("skips internal ops (tags, audits, evictions, noops)", () => {

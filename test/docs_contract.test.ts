@@ -176,6 +176,88 @@ describe("SKILL.md index-coverage claim (QA 2026-07-24 BUG-4)", () => {
   });
 });
 
+/**
+ * Janne's report, 2026-08-07, reproduced on a live Gmail account: the agent
+ * composed a draft, reported success, and the user's Gmail Drafts folder stayed
+ * empty. The upload path worked the whole time — `mail draft` files a draft
+ * with the provider correctly. It was simply ABSENT FROM SKILL.md, which is the
+ * only manual the agent reads, so the documented lifecycle ran compose → send
+ * with no third option and the agent could not know the step existed.
+ *
+ * A verb the agent cannot discover may as well not ship. mail.py's VERBS
+ * registry is the ground truth, so the expectation is driven off it: adding a
+ * verb without documenting it now fails here rather than in a user's mailbox.
+ */
+describe("SKILL.md documents every mail verb (2026-08-07)", () => {
+  const MAIL_PY = fs.readFileSync(
+    fileURLToPath(new URL("../src/room_assets/mail.py", import.meta.url)),
+    "utf-8",
+  );
+
+  /** The verbs mail.py actually dispatches, read from its VERBS registry. */
+  function cliVerbs(): string[] {
+    const block = /^VERBS = \{$([\s\S]*?)^\}$/m.exec(MAIL_PY);
+    if (!block) throw new Error("could not find the VERBS registry in mail.py");
+    return [...block[1]!.matchAll(/^\s*"([a-z-]+)":/gm)].map((m) => m[1]!);
+  }
+
+  it("finds the verb registry (guards the parser itself)", () => {
+    const verbs = cliVerbs();
+    expect(verbs).toContain("compose");
+    expect(verbs).toContain("draft");
+    expect(verbs.length).toBeGreaterThan(20);
+  });
+
+  it("mentions every dispatched verb", () => {
+    const undocumented = cliVerbs().filter(
+      (v) => !SKILL_MD.includes(`mail ${v}`),
+    );
+    expect(
+      undocumented,
+      `mail.py dispatches ${undocumented.join(", ")}, but SKILL.md never ` +
+        `names ${undocumented.length === 1 ? "it" : "them"}. SKILL.md is the ` +
+        `agent's only manual — an undocumented verb is one the agent will ` +
+        `never run, and the gap surfaces to users as a capability the ` +
+        `product silently does not have.`,
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The other half of the same defect. Documenting `mail draft` is necessary but
+ * not sufficient: an agent that reads `mail compose` — "write a new draft" —
+ * has no reason to look further unless the doc says outright that composing
+ * alone leaves the draft where the user cannot see it.
+ *
+ * Drafts/ is room-owned on purpose (SYNCABLE_FOLDERS, state.ts) and stays that
+ * way, so this disclosure is load-bearing, not a stopgap.
+ */
+describe("SKILL.md discloses that composed drafts are local (2026-08-07)", () => {
+  it("says a composed draft is not yet visible to the user", () => {
+    const LOCAL = /local|room|not.*(?:user|mail client)|invisible/i;
+    const disclosing = prose(SKILL_MD).filter(
+      (p) => /mail compose|mail reply/.test(p) && LOCAL.test(p),
+    );
+    expect(
+      disclosing,
+      "SKILL.md must state, where compose/reply are described, that the " +
+        "draft lands in the room's own Drafts/ and is NOT in the user's mail " +
+        "client — otherwise the agent reports a draft the user cannot find.",
+    ).not.toEqual([]);
+  });
+
+  it("names mail draft as the step that makes a draft user-visible", () => {
+    const pointing = prose(SKILL_MD).filter(
+      (p) => /mail draft\b/.test(p) && /provider|Gmail|Outlook/i.test(p),
+    );
+    expect(
+      pointing,
+      "SKILL.md must say that `mail draft <path>` is what files a draft into " +
+        "the user's own provider Drafts folder.",
+    ).not.toEqual([]);
+  });
+});
+
 describe("LICENSE contract", () => {
   it("LICENSE names the current package version", () => {
     const license = fs.readFileSync(

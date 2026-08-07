@@ -54,11 +54,16 @@ const CHIP_CLASS: Record<string, string> = {
   fetched: "brand",
   packed: "brand",
   draft: "brand",
+  // a composed draft is staged in the room, not yet in the user's mail
+  // client — it reads as pending, like `queued`, not as a finished action
+  draft_local: "warn",
   login: "brand",
   more: "muted",
   dry_run: "warn",
   auth: "warn",
   queued: "warn",
+  // broker advisories (restart-required, stranded drafts) are warnings
+  notice: "warn",
 };
 
 const RESULT_WAIT_MS = 10_000;

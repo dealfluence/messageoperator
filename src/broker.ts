@@ -80,6 +80,8 @@ const FETCH_REQUEST_FILE = ".fetch-request.jsonl"; // in room/, written by `mail
 const SETTINGS_REQUEST_FILE = ".settings-request.json"; // in room/, written by `mail settings`
 const SYNC_REQUEST_FILE = ".sync-request.jsonl"; // in room/, written by `mail sync`
 const PENDING_REMOVALS_FILE = "pending-removals.json"; // in broker/, written from the settings page
+/** How many stranded draft paths the unresolved-draft notice names before it summarizes. */
+const MAX_STRANDED_DRAFTS_LISTED = 3;
 
 /** `mail sync --wait-for` defaults; capped so a wait can never outlive the
  * host's own tool-call timeout. */
@@ -654,7 +656,10 @@ export class Broker {
         ...this.loginManager.pendingUrls(),
         ...this.gmailSetup.pendingUrls(),
       },
-      notices: this.hostProbe?.notices ?? [],
+      notices: [
+        ...(this.hostProbe?.notices ?? []),
+        ...this.unresolvedDraftNotices(cfg),
+      ],
       msClientIds: msClientIdSummary(cfg),
     });
   }
@@ -1857,7 +1862,10 @@ export class Broker {
           ...this.loginManager.pendingUrls(),
           ...this.gmailSetup.pendingUrls(),
         },
-        notices: this.hostProbe?.notices ?? [],
+        notices: [
+          ...(this.hostProbe?.notices ?? []),
+          ...this.unresolvedDraftNotices(cfg),
+        ],
         msClientIds: msClientIdSummary(cfg),
       });
     } catch (err) {
@@ -2001,6 +2009,70 @@ export class Broker {
         }
       }
     }
+  }
+
+  /**
+   * Advisory notices for drafts stranded in Drafts/ — written by `mail
+   * compose`/`mail reply` but never filed with the provider (`mail draft`)
+   * nor delivered (`mail send`).
+   *
+   * Drafts/ is room-owned and deliberately outside provider reconciliation
+   * (SYNCABLE_FOLDERS, state.ts), so a draft that stays here is invisible to
+   * the user — the agent reports "draft created" for something they will not
+   * find in their mail client. That is a false success report, and nothing in
+   * the room contradicted it before this notice existed.
+   *
+   * Both resolving verbs MOVE the .eml out of Drafts/ (send → Outbox/, draft →
+   * DraftBox/), so "still in Drafts/ when the cycle ends" IS "unresolved": no
+   * bookkeeping, no previous-manifest comparison, and the notice clears itself
+   * as soon as the agent acts.
+   *
+   * A draft handed back after a rejection keeps a `<name>.eml.rejected.txt`
+   * beside it and is skipped — that failure already surfaces as its own chip,
+   * and nagging about it would only bury the reason.
+   *
+   * Scoped to CONNECTED accounts (cfg), not every account tree on disk: a
+   * removed mailbox keeps its maildir as a local archive, and `mail draft` on
+   * it is rejected. Nagging there would be a notice with no way to clear it.
+   */
+  private unresolvedDraftNotices(cfg: Config): string[] {
+    const connected = new Set(cfg.accounts.map((a) => a.address));
+    const stranded: string[] = [];
+    for (const address of this.layout.accountAddresses()) {
+      if (!connected.has(address)) continue;
+      for (const sub of ["cur", "new"] as const) {
+        const dir = path.join(
+          this.layout.accounts,
+          address,
+          "mail",
+          "Drafts",
+          sub,
+        );
+        let names: string[];
+        try {
+          names = fs.readdirSync(dir);
+        } catch {
+          continue; // no such folder for this account: nothing stranded
+        }
+        const present = new Set(names);
+        for (const name of names.filter((n) => n.endsWith(".eml")).sort()) {
+          if (present.has(`${name}.rejected.txt`)) continue;
+          stranded.push(this.layout.rel(path.join(dir, name)));
+        }
+      }
+    }
+    if (!stranded.length) return [];
+    const shown = stranded.slice(0, MAX_STRANDED_DRAFTS_LISTED);
+    const rest = stranded.length - shown.length;
+    return [
+      `${stranded.length} composed draft(s) are sitting in the room's Drafts/ ` +
+        `and are NOT in the user's mail client: ${shown.join(", ")}` +
+        (rest > 0 ? ` (+${rest} more)` : "") +
+        ". Run `mail draft <path>` to file one into the user's own provider " +
+        "Drafts folder so they can see and send it (this never sends), or " +
+        "`mail send <path>` to deliver it now. Do not tell the user a draft " +
+        "is ready until you have seen DRAFT UPLOADED in send_results.",
+    ];
   }
 
   /**
